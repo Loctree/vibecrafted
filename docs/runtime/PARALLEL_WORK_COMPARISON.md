@@ -31,11 +31,35 @@ to remove the checkout. Primary/current/default/integrator/recovery checkouts,
 active parent workspaces, durable reports/artifacts, ambiguous history and
 observed open-file/process holders remain protected.
 
-This bounded surface supports inspection only. Cleanup, metadata pruning,
-merge preparation, merge execution, dry-run mutation plans and apply endpoints
-are deferred and unavailable. It creates no second ownership registry and does
-not update dispatch receipts. Existing `vc-git --compare ... --cuts ...` and
-rich repository output remain available.
+`list` and `triage` only inspect, and `removable` there is an inspection result
+for agents, never permission to remove a checkout. Merge preparation, merge
+execution and apply endpoints stay unavailable; the MCP surface is read-only.
+
+## Clean up as the person at the terminal
+
+Two separate commands do the housekeeping. Neither does the other's job.
+
+```text
+vc-git worktrees cleanup [PROJECT] [--dry-run] [--yes] [--with-ignored]
+vc-git branches cleanup  [PROJECT] [--target REF] [--also-remote] [--dry-run] [--yes]
+```
+
+`worktrees cleanup` (alias `prune`) removes worktree directories and drops Git
+registrations of directories that are already gone. Branches and commits always
+stay. It sorts every worktree by what removal would cost: worktrees with
+uncommitted files or a detached HEAD holding unmerged commits are kept; clean
+worktrees are removed; clean worktrees that hold ignored local files beyond
+build output are removed only with `--with-ignored`. Git's own refusal of an
+unclean checkout remains a second guard, because `--force` is never passed.
+
+`branches cleanup` removes branch names whose tip is an ancestor of the target
+(default: the current HEAD), so no commit is lost. Trunks, `release/`,
+`recovery/` and `archive/` branches, the target and every branch checked out in
+a worktree are kept. `--also-remote` refreshes the remote and deletes the merged
+branches there too. Squash-merged branches are listed as kept.
+
+Both commands show the full listing, then ask. Without a terminal they remove
+nothing unless `--yes` is given.
 
 ## Compare deliveries
 
