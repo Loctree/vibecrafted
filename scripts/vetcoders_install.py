@@ -6576,9 +6576,17 @@ def _darwin_process_arguments(
     position = executable_end + 1
     padding_size = (-(position - struct.calcsize("=i"))) % pointer_size
     padding_end = position + padding_size
-    if padding_end > len(raw) or any(raw[position:padding_end]):
+    if padding_end > len(raw):
         raise OSError(f"invalid Darwin process argument alignment for {pid}")
-    position = padding_end
+    # The pad is the gap before argv. A window of NULs is that gap. A window
+    # that already holds argument bytes means this Darwin layout started argv
+    # inside the computed pad; begin at the first byte rather than refusing
+    # the process. The shell helper keeps the strict rejection.
+    window = raw[position:padding_end]
+    if any(window):
+        position += next(index for index, byte in enumerate(window) if byte)
+    else:
+        position = padding_end
     arguments: list[str] = []
     for _ in range(argc):
         argument_end = raw.find(b"\0", position)
