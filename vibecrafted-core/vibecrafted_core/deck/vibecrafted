@@ -2193,6 +2193,26 @@ def process_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    # A zombie still answers kill(pid, 0). In the installer's PID namespace the
+    # init process does not reap it, so a dead server looks live and its
+    # /proc identity no longer matches the process we started. Hosts without
+    # procfs (macOS) have nothing further to say: the signal probe stands.
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return True
+    stat = proc / str(pid) / "stat"
+    try:
+        raw = stat.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    closing = raw.rfind(")")
+    if closing < 0:
+        return True
+    fields = raw[closing + 2 :].split()
+    if fields and fields[0] in {"Z", "X"}:
+        return False
     return True
 
 
@@ -3547,6 +3567,15 @@ PY
 }
 
 _current_shell_pid() {
+  # The lock and launch witness belong to this shell, not to whatever
+  # process last spawned the helper. A wrapper between the shell and
+  # Python exits before the peer reads the lock, and the peer then
+  # treats a live owner as stale. bash 3 has no BASHPID; ask Python then.
+  _CURRENT_SHELL_PID="${BASHPID:-}"
+  if [[ "$_CURRENT_SHELL_PID" =~ ^[0-9]+$ ]] && \
+    [[ "$_CURRENT_SHELL_PID" -gt 1 ]]; then
+    return 0
+  fi
   local runtime_dir temp_file
   runtime_dir="$(_server_runtime_dir)"
   mkdir -p "$runtime_dir"
@@ -3633,7 +3662,7 @@ _managed_pid_state() {
     printf 'invalid\n'
     return 0
   fi
-  if ! kill -0 "$pid" 2>/dev/null; then
+  if ! kill -0 "$pid" 2>/dev/null || _process_is_reaped_or_zombie "$pid"; then
     printf 'stale\n'
     return 0
   fi
@@ -3690,18 +3719,32 @@ _server_origin() {
   _server_python origin "${1:-}" "${2:-}"
 }
 
+_process_is_reaped_or_zombie() {
+  local pid="${1:-}" stat_line state
+  # No procfs means we cannot see a zombie. Do not treat every live
+  # macOS process as reaped.
+  [[ -d /proc ]] || return 1
+  [[ -d "/proc/$pid" ]] || return 0
+  stat_line="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
+  [[ -n "$stat_line" ]] || return 1
+  state="${stat_line##*)}"
+  state="${state#"${state%%[![:space:]]*}"}"
+  state="${state%% *}"
+  [[ "$state" == "Z" || "$state" == "X" ]]
+}
+
 _wait_for_pid_exit() {
   local pid="${1:-}"
   local ticks="${2:-50}"
   local elapsed=0
   while [[ "$elapsed" -lt "$ticks" ]]; do
-    if ! kill -0 "$pid" 2>/dev/null; then
+    if ! kill -0 "$pid" 2>/dev/null || _process_is_reaped_or_zombie "$pid"; then
       return 0
     fi
     sleep 0.1
     elapsed=$((elapsed + 1))
   done
-  ! kill -0 "$pid" 2>/dev/null
+  ! kill -0 "$pid" 2>/dev/null || _process_is_reaped_or_zombie "$pid"
 }
 
 _cleanup_managed_evidence() {
@@ -3846,6 +3889,9 @@ _stop_managed_process() {
   fi
 
   if _wait_for_pid_exit "$pid" "${VIBECRAFTED_STOP_TERM_WAIT_TICKS:-50}"; then
+    # A PID-namespace init does not reap our children. wait collects the
+    # zombie so a later kill probe sees the process gone.
+    wait "$pid" 2>/dev/null || true
     _cleanup_managed_evidence "$role" "$pid"
     printf "%b✓%b %s stopped.\n" "$_green" "$_reset" "$label"
     return 0
@@ -3869,6 +3915,7 @@ _stop_managed_process() {
       "$_red" "$_reset" "$label" "$pid" >&2
     return 1
   fi
+  wait "$pid" 2>/dev/null || true
   _cleanup_managed_evidence "$role" "$pid"
   printf "%b✓%b %s stopped.\n" "$_green" "$_reset" "$label"
 }
@@ -4467,16 +4514,31 @@ cmd_server() {
       if _server_python health-wait "$host" "$port" "$server_pid" "15" \
         > /dev/null 2> "$health_error"; then
         current_state="$(_managed_pid_state "$pid_file" "server")"
-        if [[ "$current_state" == "foreign" ]] && \
-          _capture_managed_identity server "$server_pid" "$server_nonce" \
+        # A loaded PID namespace can make one /proc read disagree with the
+        # snapshot just published. Recapture while the process is still the
+        # one we started; a zombie or a reaped pid is not republished.
+        local identity_attempt=0
+        while [[ "$current_state" != "live" && "$identity_attempt" -lt 20 ]]; do
+          if ! kill -0 "$server_pid" 2>/dev/null || \
+            _process_is_reaped_or_zombie "$server_pid"; then
+            break
+          fi
+          if _capture_managed_identity server "$server_pid" "$server_nonce" \
             "$server_bin" "$server_bin" \
             > /dev/null 2> "$identity_error"; then
-          rm -f "$identity_error"
+            rm -f "$identity_error"
+          fi
           current_state="$(_managed_pid_state "$pid_file" "server")"
-        fi
+          identity_attempt=$((identity_attempt + 1))
+          [[ "$current_state" == "live" ]] || sleep 0.05
+        done
         if [[ "$current_state" != "live" ]]; then
-          printf "%b✗%b Server became healthy but its managed identity could not be verified.\n" \
-            "$_red" "$_reset" >&2
+          local identity_detail=""
+          if [[ -s "$identity_error" ]]; then
+            identity_detail="$(tail -n 1 "$identity_error" 2>/dev/null || true)"
+          fi
+          printf "%b✗%b Server became healthy but its managed identity could not be verified.%s\n" \
+            "$_red" "$_reset" "${identity_detail:+ $identity_detail}" >&2
           if _stop_launch_owned_process \
             server Server "$server_pid" "$server_launcher_pid" "$server_nonce"; then
             _server_python update-status "$status_file" "failed" "none"
