@@ -104,7 +104,7 @@ if (Test-Path (Join-Path $repoRoot "config")) {
 
 & python (Join-Path $repoRoot "scripts\distribution_manifest.py") carrier `
     --source $repoRoot --output (Join-Path $payload "source-provenance.json") `
-    --owner-repo vetcoders/vibecrafted --source-revision $SourceRevision
+    --owner-repo $env:VIBECRAFTED_SOURCE_OWNER_REPO --source-revision $SourceRevision
 if ($LASTEXITCODE -ne 0) { Die "source provenance failed" }
 
 $shim = Join-Path $work "shim"

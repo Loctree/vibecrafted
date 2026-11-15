@@ -150,7 +150,7 @@ cp -R "$repo_root/config/." "$payload/config/"
 
 python3 "$repo_root/scripts/distribution_manifest.py" carrier \
   --source "$repo_root" --output "$payload/source-provenance.json" \
-  --owner-repo vetcoders/vibecrafted --source-revision "$source_revision"
+  --owner-repo "$VIBECRAFTED_SOURCE_OWNER_REPO" --source-revision "$source_revision"
 # Loctree, AICX, PRView and ScreenScribe ship through their own channels
 # (npm / GitHub releases / PyPI); the pack records only its own executables.
 PYTHONPATH="$payload/vibecrafted-core" python3 \
