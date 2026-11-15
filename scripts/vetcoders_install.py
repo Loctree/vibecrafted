@@ -6486,9 +6486,17 @@ def _darwin_process_arguments(
     position = executable_end + 1
     padding_size = (-(position - struct.calcsize("=i"))) % pointer_size
     padding_end = position + padding_size
-    if padding_end > len(raw) or any(raw[position:padding_end]):
+    if padding_end > len(raw):
         raise OSError(f"invalid Darwin process argument alignment for {pid}")
-    position = padding_end
+    # The pad is the gap before argv. A window of NULs is that gap. A window
+    # that already holds argument bytes means this Darwin layout started argv
+    # inside the computed pad; begin at the first byte rather than refusing
+    # the process. The shell helper keeps the strict rejection.
+    window = raw[position:padding_end]
+    if any(window):
+        position += next(index for index, byte in enumerate(window) if byte)
+    else:
+        position = padding_end
     arguments: list[str] = []
     for _ in range(argc):
         argument_end = raw.find(b"\0", position)
@@ -17293,7 +17301,7 @@ def _runtime_retirement_generation(
     if manifest is None:
         raise RuntimeError(error or "missing runtime identity")
     if (
-        manifest["owner_repo"] != _PACK_OWNER_REPO
+        manifest["owner_repo"] not in _PACK_OWNER_REPOS
         or manifest["version"] != generation.name
     ):
         raise RuntimeError("generation owner/version disagrees with physical identity")
@@ -26304,7 +26312,7 @@ def _runtime_retirement_legacy_leaves(
         provenance = _load_runtime_pack_provenance(root)
         if (
             manifest is None
-            or manifest["owner_repo"] != _PACK_OWNER_REPO
+            or manifest["owner_repo"] not in _PACK_OWNER_REPOS
             or manifest["version"] != Path(role["destination"]).name
             or provenance.get("schema") != _PACK_PROVENANCE_SCHEMA
             or provenance.get("version") != manifest["version"]
@@ -27844,8 +27852,9 @@ def _load_runtime_pack_provenance(root: Path) -> dict[str, Any]:
 _PACK_PROVENANCE_SCHEMA = "io.vetcoders.vibecrafted.runtime-pack-provenance.v1"
 _PACK_SOURCE_PROVENANCE_NAME = "source-provenance.json"
 _PACK_INSTALL_ORIGIN = "pack-provenance"
-_PACK_OWNER_REPO = "vetcoders/vibecrafted"
-_PACK_REPO_URL = "https://github.com/vetcoders/vibecrafted"
+# Loctree/vibecrafted is the home after the org move; vetcoders/vibecrafted
+# stays accepted so packs built before the move still verify.
+_PACK_OWNER_REPOS = frozenset({"Loctree/vibecrafted", "vetcoders/vibecrafted"})
 _PACK_SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -27866,7 +27875,7 @@ def pack_install_identity(generation: Path) -> tuple[str, str, str]:
     A missing or untrusted pack yields ``("unknown", "", "")``. A full
     ``source_revisions.vibecrafted`` SHA is stored as its first 8 hex
     characters, matching ``get_repo_commit``. The GitHub URL is filled only
-    when ``source-provenance.json`` names ``vetcoders/vibecrafted`` at that
+    when ``source-provenance.json`` names a known vibecrafted repository at that
     same revision. Origin is ``pack-provenance`` whenever the SHA came from
     the pack, even if the URL cannot be confirmed.
     """
@@ -27883,10 +27892,10 @@ def pack_install_identity(generation: Path) -> tuple[str, str, str]:
     url = ""
     if (
         source.get("schema") == _SOURCE_PROVENANCE_SCHEMA
-        and source.get("owner_repo") == _PACK_OWNER_REPO
+        and source.get("owner_repo") in _PACK_OWNER_REPOS
         and source.get("source_revision") == full
     ):
-        url = _PACK_REPO_URL
+        url = f"https://github.com/{source['owner_repo']}"
     return full[:8], url, _PACK_INSTALL_ORIGIN
 
 
