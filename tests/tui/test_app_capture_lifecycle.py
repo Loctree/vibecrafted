@@ -136,8 +136,9 @@ def lane(tmp_path: Path, monkeypatch) -> tuple[Path, dict[str, str]]:
         VIBECRAFTED_HOME=str(tmp_path / "crafted"),
         VIBECRAFTED_RUNTIME_HOME=str(tmp_path / "runtime"),
         VIBECRAFTED_UPDATE_HELPER_HARNESS="1",
-        # The helper binds one usable Python before reading journals; the
-        # fixture App carries no runtime interpreter of its own.
+        # The helper binds one usable Python before reading journals. The
+        # fixture App has a runtime tree and no interpreter of its own, so
+        # the selector must not try to execute a copy of that tree.
         VIBECRAFTED_UPDATE_PYTHON=sys.executable,
     )
     for key in ("HOME", "VIBECRAFTED_HOME", "VIBECRAFTED_RUNTIME_HOME"):

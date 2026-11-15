@@ -19,6 +19,29 @@ F_GETFD = 1
 F_SETFD = 2
 FD_CLOEXEC = 1
 
+
+def _ensure_lock_region(fd: int) -> None:
+    """Make sure byte 0 exists so ``msvcrt.locking`` has a region to lock.
+
+    A non-empty file is already ready. When several processes race to create
+    the byte, the winner may lock it before a peer's write lands; Windows then
+    rejects that write with ``PermissionError``. The byte exists by then, so a
+    peer only needs to fall through and let the blocking lock call wait.
+    """
+    if os.fstat(fd).st_size > 0:
+        return
+    position = os.lseek(fd, 0, os.SEEK_CUR)
+    try:
+        os.lseek(fd, 0, os.SEEK_END)
+        os.write(fd, b"\n")
+    except PermissionError:
+        if os.fstat(fd).st_size > 0:
+            return
+        raise
+    finally:
+        os.lseek(fd, position, os.SEEK_SET)
+
+
 if os.name != "nt":
     import fcntl as _fcntl
 
@@ -33,17 +56,6 @@ if os.name != "nt":
     fcntl = _fcntl.fcntl
 else:
     import msvcrt
-
-    def _ensure_lock_region(fd: int) -> None:
-        size = os.fstat(fd).st_size
-        if size > 0:
-            return
-        position = os.lseek(fd, 0, os.SEEK_CUR)
-        try:
-            os.lseek(fd, 0, os.SEEK_END)
-            os.write(fd, b"\n")
-        finally:
-            os.lseek(fd, position, os.SEEK_SET)
 
     def flock(fd: int, operation: int) -> None:
         """Lock ``fd`` with flock-shaped flags using ``msvcrt.locking``."""

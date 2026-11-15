@@ -1587,6 +1587,10 @@ def test_worktree_mutations_hold_portable_lock_only_during_git(
         }:
             assert held, "Git worktree metadata mutation bypassed the repository lock"
             mutations.append(command[2])
+        elif command[:3] == ["git", "worktree", "list"]:
+            # Registration proof holds the lock. Cache identity also lists
+            # worktrees and must stay outside it.
+            pass
         else:
             assert not held, "lock must not cover validation or worker lifecycle"
         return real_run(command, **kwargs)
