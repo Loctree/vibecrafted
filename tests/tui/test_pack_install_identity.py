@@ -174,3 +174,16 @@ def test_pack_projection_writes_provenance_into_install_state(
         assert not real_state.exists()
     else:
         assert real_state.stat().st_mtime_ns == real_stamp
+
+
+def test_pack_identity_confirms_url_for_loctree_home(tmp_path: Path) -> None:
+    generation = tmp_path / "generation"
+    source = _matching_source()
+    source["owner_repo"] = "Loctree/vibecrafted"
+    _write_pack(generation, source=source)
+
+    assert installer.pack_install_identity(generation) == (
+        _SHA[:8],
+        "https://github.com/Loctree/vibecrafted",
+        "pack-provenance",
+    )
