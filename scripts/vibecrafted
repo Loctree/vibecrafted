@@ -4026,7 +4026,10 @@ _server_lifecycle_lock_is_owned() {
 
 _with_server_lifecycle_lock() (
   _acquire_server_lifecycle_lock || exit $?
-  trap '_release_server_lifecycle_lock' EXIT
+  # Cleanup must not replace cmd_server's status. set -e treats a failed
+  # command in the EXIT trap as the subshell status, so a healthy start
+  # can exit 1 with nothing on stderr.
+  trap '_release_server_lifecycle_lock || true' EXIT
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
