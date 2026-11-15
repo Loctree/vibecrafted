@@ -3477,6 +3477,17 @@ elif operation == "lock-owner-write":
             "process": lock_process_snapshot(pid),
         },
     )
+elif operation == "lock-mkdir":
+    # The lifecycle lock is claimed by creating its directory. Only the
+    # kernel's mkdir(2) is exclusive: uutils mkdir(1) (Ubuntu 26.04's
+    # /usr/bin/mkdir) checks exists() first and then maps a lost race's EEXIST
+    # to success, so two racing shells both "won" and shared the lock.
+    try:
+        os.mkdir(Path(args[0]))
+    except FileExistsError:
+        raise SystemExit(1)
+    except OSError as exc:
+        fail(f"cannot create lifecycle lock directory {args[0]}: {exc}", 1)
 elif operation == "lock-hold":
     held_path = Path(args[0])
     ready_path = Path(args[1])
@@ -4046,7 +4057,9 @@ _acquire_server_lifecycle_lock() {
   _SERVER_LIFECYCLE_LOCK_HOLDER=""
 
   while [[ "$attempts" -lt "${VIBECRAFTED_LIFECYCLE_LOCK_TICKS:-100}" ]]; do
-    if mkdir "$lock_dir" 2>/dev/null; then
+    # Never trust mkdir(1)'s exit status here: uutils mkdir reports success
+    # to the loser of a concurrent create. The helper calls mkdir(2) directly.
+    if _server_python lock-mkdir "$lock_dir" 2>/dev/null; then
       # Publish the flock before owner.json. A peer that only sees the
       # directory waits; once the owner record exists, the flock proves this
       # shell is alive even if /proc calls the pid a zombie.
