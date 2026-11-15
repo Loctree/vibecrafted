@@ -397,6 +397,11 @@ def _payload_files(root: Path, *, allow_empty: bool = False) -> list[dict[str, A
     return records
 
 
+# Loctree/vibecrafted is the home after the org move; vetcoders/vibecrafted
+# stays accepted so packs built before the move still verify.
+_CANONICAL_OWNER_REPOS = frozenset({"Loctree/vibecrafted", "vetcoders/vibecrafted"})
+
+
 def _source_provenance(root: Path, *, expected_revision: str) -> dict[str, Any]:
     path = root / SOURCE_PROVENANCE_NAME
     try:
@@ -410,7 +415,7 @@ def _source_provenance(root: Path, *, expected_revision: str) -> dict[str, Any]:
         not isinstance(payload, dict)
         or set(payload) != {"schema", "owner_repo", "source_revision", "payload"}
         or payload.get("schema") != SOURCE_PROVENANCE_SCHEMA
-        or payload.get("owner_repo") != "vetcoders/vibecrafted"
+        or payload.get("owner_repo") not in _CANONICAL_OWNER_REPOS
         or payload.get("source_revision") != expected_revision
         or raw != _canonical_json(payload)
     ):
