@@ -26,6 +26,21 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 function Prepare-DonorSources([string]$Destination) {
     & python (Join-Path $repoRoot "scripts\build-source-runtime-pack.py") --materialize $Destination
     if ($LASTEXITCODE -ne 0) { Die "canonical donor selection failed" }
+    $selectionPath = Join-Path $Destination "selection.json"
+    if (-not (Test-Path -LiteralPath $selectionPath -PathType Leaf)) {
+        Die "canonical donor selection is missing"
+    }
+    $selection = Get-Content -LiteralPath $selectionPath -Raw | ConvertFrom-Json
+    foreach ($component in @(
+        @{ Name = "vc-terminal"; Requested = $env:VIBECRAFTED_TERMINAL_REVISION },
+        @{ Name = "vc-frame"; Requested = $env:VIBECRAFTED_FRAME_REVISION }
+    )) {
+        $actual = $selection.components.PSObject.Properties[$component.Name].Value.revision
+        if ($component.Requested -and
+            $component.Requested -cne $actual) {
+            Die "requested $($component.Name) revision does not match materialized source"
+        }
+    }
 }
 # Build-only probe of the actual source path; also useful before provisioning MSVC.
 if ($PrepareSources) {
@@ -104,7 +119,7 @@ if (Test-Path (Join-Path $repoRoot "config")) {
 
 & python (Join-Path $repoRoot "scripts\distribution_manifest.py") carrier `
     --source $repoRoot --output (Join-Path $payload "source-provenance.json") `
-    --owner-repo vetcoders/vibecrafted --source-revision $SourceRevision
+    --owner-repo $env:VIBECRAFTED_SOURCE_OWNER_REPO --source-revision $SourceRevision
 if ($LASTEXITCODE -ne 0) { Die "source provenance failed" }
 
 $shim = Join-Path $work "shim"
@@ -259,10 +274,42 @@ if (-not (Test-Path -LiteralPath $terminalBuilt -PathType Leaf)) {
 }
 
 Write-Host "Building vc-frame for win32-x64 at $frameRevision"
+$frameDirty = "0"
+# 4f689254 calls the Unix-only socket probe from project admission. The
+# donor pin stays put; this edit is the Windows compile gate until a
+# later pin includes it. git apply rejects the same diff once Git for
+# Windows checks the extract out with CRLF, so the edit is textual and
+# newline-preserving. The binary is marked dirty so it does not claim
+# to be a clean build of that revision.
+if ($frameRevision -eq "4f689254bd5cad05adee5ab2a8555e9d3b775dfb") {
+    $prepare = Join-Path $frameSrc "src\project_prepare.rs"
+    if (-not (Test-Path -LiteralPath $prepare -PathType Leaf)) {
+        Die "vc-frame project_prepare.rs missing at $frameRevision"
+    }
+    $original = [System.IO.File]::ReadAllText($prepare)
+    $newline = "`n"
+    if ($original.Contains("`r`n")) { $newline = "`r`n" }
+    $text = $original.Replace("`r`n", "`n")
+    $oldImport = "    sessions::{SocketOwnership, probe_socket_ownership, validate_session_name},`n};"
+    $newImport = "    sessions::validate_session_name,`n};`n// probe_socket_ownership exists only under cfg(unix). On Windows the`n// session path is a marker file, and list-tabs below is the liveness check.`n#[cfg(unix)]`nuse zellij_utils::sessions::{SocketOwnership, probe_socket_ownership};"
+    $oldCall = "    let socket = Path::new(&admission.socket_dir).join(&admission.session_name);`n    if probe_socket_ownership(&socket) != SocketOwnership::Live {`n        return Err(`"admitted native session is not live in its claimed namespace`".to_owned());`n    }"
+    $newCall = "    #[cfg(unix)]`n    {`n        let socket = Path::new(&admission.socket_dir).join(&admission.session_name);`n        if probe_socket_ownership(&socket) != SocketOwnership::Live {`n            return Err(`n                `"admitted native session is not live in its claimed namespace`".to_owned(),`n            );`n        }`n    }"
+    if (-not $text.Contains($oldImport)) {
+        Die "vc-frame Windows socket-probe import was not found at $frameRevision"
+    }
+    if (-not $text.Contains($oldCall)) {
+        Die "vc-frame Windows socket-probe call was not found at $frameRevision"
+    }
+    $text = $text.Replace($oldImport, $newImport).Replace($oldCall, $newCall)
+    if ($newline -eq "`r`n") { $text = $text.Replace("`n", "`r`n") }
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($prepare, $text, $utf8)
+    $frameDirty = "1"
+}
 Push-Location $frameSrc
 try {
     $env:VC_FRAME_GIT_SHA = $frameRevision
-    $env:VC_FRAME_GIT_DIRTY = "0"
+    $env:VC_FRAME_GIT_DIRTY = $frameDirty
     & cargo xtask build --release
     if ($LASTEXITCODE -ne 0) { Die "vc-frame cargo xtask build failed" }
 }

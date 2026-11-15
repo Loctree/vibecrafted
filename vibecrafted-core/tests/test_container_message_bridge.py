@@ -8,7 +8,11 @@ import time
 from pathlib import Path
 
 import pytest
-from vibecrafted_core import message_control
+from vibecrafted_core import (
+    container_message_bridge,
+    container_message_transport,
+    message_control,
+)
 from vibecrafted_core.container_message_bridge import (
     _MAX_REQUEST,
     _SCAN,
@@ -33,14 +37,16 @@ def _create_run(home: Path, run_id: str) -> None:
 
 
 def _fake_docker(path: Path) -> None:
+    core = str(Path(__file__).resolve().parents[1])
     path.write_text(
         f"#!{sys.executable}\n"
         "import os,sys\n"
+        f"os.environ['PYTHONPATH']={core!r}+os.pathsep+os.environ.get('PYTHONPATH','')\n"
         "a=sys.argv[1:]\n"
         "assert a.pop(0)=='exec'\n"
         "if a[0]=='-i': a.pop(0)\n"
         "a.pop(0)\n"
-        "assert a.pop(0)=='python3'\n"
+        "a.pop(0)\n"
         "os.execv(sys.executable,[sys.executable,*a])\n"
     )
     path.chmod(0o755)
@@ -67,7 +73,7 @@ def test_guest_cli_receive_and_ack_reach_only_host_owner(
         env=os.environ,
         staging_root=str(staging),
     )
-    relay.start()
+    relay.start(guest_python=sys.executable)
     env = {
         **os.environ,
         "VIBECRAFTED_HOME": str(guest_home),
@@ -217,7 +223,7 @@ def test_relay_failure_is_visible_and_stop_is_idempotent(
     with pytest.raises(
         message_control.MessageControlError, match="bridge_roundtrip_failed"
     ):
-        relay.start()
+        relay.start(guest_python=sys.executable)
     deadline = time.monotonic() + 3
     while not relay.failure and time.monotonic() < deadline:
         time.sleep(0.01)
@@ -226,7 +232,121 @@ def test_relay_failure_is_visible_and_stop_is_idempotent(
     relay.close()
     assert not Path(relay.guest_path).exists()
     with pytest.raises(message_control.MessageControlError, match="already_started"):
-        relay.start()
+        relay.start(guest_python=sys.executable)
+
+
+def test_relay_retries_transient_container_exec_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = tmp_path / "host"
+    monkeypatch.setenv("VIBECRAFTED_HOME", str(host))
+    _create_run(host, "run-1")
+    docker = tmp_path / "docker"
+    _fake_docker(docker)
+    relay = ContainerMessageRelay(
+        cli=str(docker),
+        container_id="c",
+        run_id="run-1",
+        env=os.environ,
+        staging_root=str(tmp_path / "stage"),
+    )
+    real_exec = relay._exec
+    scan_calls = 0
+
+    def transient_exec(
+        script: str,
+        *args: str,
+        data: bytes | None = None,
+        python: str = "python3",
+    ):
+        nonlocal scan_calls
+        if script == _SCAN:
+            scan_calls += 1
+            if scan_calls == 1:
+                return subprocess.CompletedProcess([], 1, b"", b"temporary failure")
+        return real_exec(script, *args, data=data, python=python)
+
+    monkeypatch.setattr(relay, "_exec", transient_exec)
+    relay.start(guest_python=sys.executable)
+    try:
+        assert scan_calls >= 2
+        assert not relay.failure
+        result = container_message_transport.request(
+            channel=relay.guest_path,
+            action="ping",
+            run_id="run-1",
+            session="",
+            message_id="",
+            timeout=5,
+        )
+        assert result == {"run_id": "run-1"}
+        assert not relay.failure
+    finally:
+        relay.close()
+
+
+@pytest.mark.parametrize(
+    ("failures", "expected_error"),
+    [(1, None), (3, "bridge_host_unavailable")],
+)
+def test_relay_retries_transient_host_request_errors_without_stopping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failures: int,
+    expected_error: str | None,
+) -> None:
+    host = tmp_path / "host"
+    monkeypatch.setenv("VIBECRAFTED_HOME", str(host))
+    _create_run(host, "run-1")
+    docker = tmp_path / "docker"
+    _fake_docker(docker)
+    calls = 0
+
+    def receive_messages(*, run_id: str, session: str) -> list[dict[str, object]]:
+        nonlocal calls
+        assert run_id == "run-1" and session == ""
+        calls += 1
+        if calls <= failures:
+            raise OSError("transient host storage failure")
+        return []
+
+    monkeypatch.setattr(container_message_bridge, "receive_messages", receive_messages)
+    relay = ContainerMessageRelay(
+        cli=str(docker),
+        container_id="c",
+        run_id="run-1",
+        env=os.environ,
+        staging_root=str(tmp_path / "stage" / "run-1"),
+    )
+    relay.start(guest_python=sys.executable)
+    try:
+        if expected_error:
+            with pytest.raises(
+                container_message_transport.BridgeTransportError,
+                match=expected_error,
+            ):
+                container_message_transport.request(
+                    channel=relay.guest_path,
+                    action="receive",
+                    run_id="run-1",
+                    session="",
+                    message_id="",
+                    timeout=5,
+                )
+        else:
+            result = container_message_transport.request(
+                channel=relay.guest_path,
+                action="receive",
+                run_id="run-1",
+                session="",
+                message_id="",
+                timeout=5,
+            )
+            assert result == []
+        assert calls == min(failures + 1, 3)
+        assert not relay.failure
+    finally:
+        relay.close()
 
 
 def _guest_connection(root: Path, run_id: str, *, age: float = 0) -> Path:
@@ -269,7 +389,7 @@ def test_legacy_cli_discovers_host_connection_without_environment(
     )
     (staging / "run-legacy").mkdir(parents=True, exist_ok=True)
     (staging / "run-legacy" / "provider.identity").write_text("existing-provider")
-    relay.start()
+    relay.start(guest_python=sys.executable)
     env = {
         **os.environ,
         "VIBECRAFTED_HOME": str(guest),
@@ -349,6 +469,53 @@ def test_legacy_discovery_refuses_stale_foreign_and_ambiguous_connections(
         guest_channel("run-1")
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFOs")
+def test_legacy_discovery_rejects_fifo_connection_without_blocking(
+    tmp_path: Path,
+) -> None:
+    channel = _guest_connection(tmp_path, "run-1")
+    connection = channel / "connection.json"
+    connection.unlink()
+    os.mkfifo(connection)
+
+    started = time.monotonic()
+    with pytest.raises(
+        container_message_transport.BridgeTransportError,
+        match="bridge_invalid_connection",
+    ):
+        container_message_transport.discover_channel(channel.parent, "run-1")
+    assert time.monotonic() - started < 1
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFOs")
+def test_request_rejects_fifo_reply_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    channel = tmp_path / "channel"
+    channel.mkdir()
+    request_id = "a" * 32
+    monkeypatch.setattr(
+        container_message_transport.uuid,
+        "uuid4",
+        lambda: type("FixedUUID", (), {"hex": request_id})(),
+    )
+    os.mkfifo(channel / f"{request_id}.reply")
+
+    started = time.monotonic()
+    with pytest.raises(
+        container_message_transport.BridgeTransportError,
+        match="bridge_invalid_response",
+    ):
+        container_message_transport.request(
+            channel=str(channel),
+            action="receive",
+            run_id="run-1",
+            session="",
+            message_id="",
+        )
+    assert time.monotonic() - started < 1
+
+
 def test_second_live_connection_does_not_announce_connected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -366,12 +533,12 @@ def test_second_live_connection_does_not_announce_connected(
     }
     first = ContainerMessageRelay(**kwargs)
     second = ContainerMessageRelay(**kwargs)
-    first.start()
+    first.start(guest_python=sys.executable)
     try:
         with pytest.raises(
             message_control.MessageControlError, match="bridge_roundtrip_failed"
         ):
-            second.start()
+            second.start(guest_python=sys.executable)
         assert not Path(second.guest_path).exists()
         assert not first.failure
     finally:
@@ -394,6 +561,23 @@ def test_implicit_bridge_selection_requires_this_staged_run(tmp_path, monkeypatc
     assert not guest_bridge_selected("")
 
 
+def test_implicit_bridge_selection_tolerates_inaccessible_guest_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vibecrafted_core import dev_container
+    from vibecrafted_core.container_message_bridge import guest_bridge_selected
+
+    monkeypatch.delenv(BRIDGE_ENV, raising=False)
+    monkeypatch.delenv("VIBECRAFTED_MESSAGE_BRIDGE_REQUIRED", raising=False)
+    monkeypatch.setattr(dev_container, "RUN_STAGING_ROOT", str(tmp_path))
+
+    def inaccessible(_path: Path) -> bool:
+        raise PermissionError("guest staging is not traversable")
+
+    monkeypatch.setattr(Path, "is_file", inaccessible)
+    assert not guest_bridge_selected("run-id")
+
+
 def test_roundtrip_uses_discovery_and_preserves_old_undiscoverable_channel(
     tmp_path, monkeypatch
 ):
@@ -413,7 +597,7 @@ def test_roundtrip_uses_discovery_and_preserves_old_undiscoverable_channel(
         staging_root=str(stage),
     )
     try:
-        relay.start()
+        relay.start(guest_python=sys.executable)
         assert not relay.failure
     finally:
         relay.close()

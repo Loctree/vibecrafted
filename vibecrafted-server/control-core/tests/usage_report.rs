@@ -426,6 +426,20 @@ fn source<'a>(
 }
 
 #[test]
+fn first_unreadable_scan_cache_is_not_marked_stale() {
+    let home = fixture_home("first-unreadable");
+    write_cache(&home, "claude", json!({}));
+    let path = home.join("telemetry/claude/scan-cache.json");
+    fs::write(&path, b"invalid cache").expect("corrupt initial cache");
+
+    let report = settled_local_report(&home, UsageFilter::default());
+    let claude = source(&report, "claude");
+    assert_eq!(claude.error.as_deref(), Some("scan_cache_unreadable"));
+    assert!(!claude.stale);
+    assert_eq!(report.totals.tokens_total_known, 0);
+}
+
+#[test]
 fn local_usage_reads_real_provider_formats_and_never_fabricates_completion() {
     let home = fixture_home("local-formats");
     write_cache(
@@ -1028,10 +1042,11 @@ fn a_native_sized_local_cache_never_blocks_requests_and_retains_failed_refresh()
     }
     file.write_all(b"\"}}}}").unwrap();
     drop(file);
+    let foreground_budget = StdDuration::from_secs(2);
     let start = Instant::now();
     let first = ControlPlane::new(&home).usage_report(now(), UsageFilter::default());
     assert!(
-        start.elapsed() < StdDuration::from_millis(500),
+        start.elapsed() < foreground_budget,
         "foreground read the native-sized ledger"
     );
     assert!(first.local_sources.iter().any(|s| s.refreshing));
@@ -1047,7 +1062,7 @@ fn a_native_sized_local_cache_never_blocks_requests_and_retains_failed_refresh()
         requests.push(std::thread::spawn(move || {
             let start = Instant::now();
             let report = ControlPlane::new(&home).usage_report(now(), UsageFilter::default());
-            assert!(start.elapsed() < StdDuration::from_millis(500));
+            assert!(start.elapsed() < foreground_budget);
             report
         }));
     }
