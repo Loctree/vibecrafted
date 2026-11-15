@@ -3024,6 +3024,36 @@ def lock_owner_digest(payload: dict[str, object]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def lifecycle_lock_holder_state(lock_dir: Path) -> bool | None:
+    """Whether a live owner still holds the lifecycle flock.
+
+    ``True`` means a holder process has the exclusive flock, so the owner is
+    alive even when a PID-namespace ``/proc`` read says otherwise. ``False``
+    means the holder file exists and the flock is free, so the owner has
+    exited even if its zombie still answers ``kill``. ``None`` means this lock
+    has no holder file and the caller must use the process snapshot.
+    """
+    held = lock_dir / "held"
+    try:
+        descriptor = os.open(held, os.O_RDWR)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        fail(f"cannot inspect lifecycle lock holder {held}: {exc}", 75)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in {errno.EAGAIN, errno.EWOULDBLOCK}:
+                return True
+            fail(f"cannot probe lifecycle lock holder {held}: {exc}", 75)
+        else:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            return False
+    finally:
+        os.close(descriptor)
+
+
 def open_lifecycle_recovery_guard(path: Path) -> int:
     flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
     try:
@@ -3447,12 +3477,42 @@ elif operation == "lock-owner-write":
             "process": lock_process_snapshot(pid),
         },
     )
+elif operation == "lock-hold":
+    held_path = Path(args[0])
+    ready_path = Path(args[1])
+    owner_pid = int(args[2])
+    if owner_pid <= 1:
+        fail("lifecycle lock holder requires a real owner pid", 75)
+    descriptor = os.open(held_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        temporary = ready_path.with_name(
+            f".{ready_path.name}.tmp.{os.getpid()}"
+        )
+        temporary.write_text("held\n", encoding="utf-8")
+        os.replace(temporary, ready_path)
+        # SIGKILL skips the owner's EXIT trap. Keep the flock until the
+        # owner pid is gone, not until our parent changes: backgrounding
+        # the helper inserts a subshell that outlives that owner.
+        while True:
+            try:
+                os.kill(owner_pid, 0)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                pass
+            time.sleep(0.05)
+    finally:
+        os.close(descriptor)
 elif operation == "lock-state":
     path = Path(args[0])
     try:
         payload = read_lock_owner(path)
         pid, nonce = validate_lock_owner(payload)
-        if not process_alive(pid):
+        holder_state = lifecycle_lock_holder_state(path.parent)
+        if holder_state is True:
+            print(f"live:{pid}")
+        elif holder_state is False or not process_alive(pid):
             print(f"stale:{pid}:{nonce}:{lock_owner_digest(payload)}")
         else:
             try:
@@ -3471,7 +3531,12 @@ elif operation == "lock-state":
                     print(f"live:{pid}")
     except SystemExit as exc:
         if exc.code == 5:
-            print("invalid")
+            # The directory is published before owner.json so the holder can
+            # take the flock first. A missing owner is not corrupt evidence.
+            if not path.is_file() and path.parent.is_dir():
+                print("initializing")
+            else:
+                print("invalid")
         else:
             raise
 elif operation == "lock-reclaim":
@@ -3520,7 +3585,11 @@ elif operation == "lock-reclaim":
         ):
             print("changed")
             raise SystemExit(0)
-        if process_alive(pid):
+        holder_state = lifecycle_lock_holder_state(lock_dir)
+        if holder_state is True:
+            print("held")
+            raise SystemExit(0)
+        if holder_state is not False and process_alive(pid):
             try:
                 current_process = lock_process_snapshot(pid)
             except SystemExit:
@@ -3920,6 +3989,49 @@ _stop_managed_process() {
   printf "%b✓%b %s stopped.\n" "$_green" "$_reset" "$label"
 }
 
+_start_server_lifecycle_lock_holder() {
+  local lock_dir="${1:-}" ready spins=0
+  ready="$lock_dir/holder.ready"
+  rm -f "$ready"
+  _SERVER_LIFECYCLE_LOCK_HOLDER=""
+  _server_python lock-hold "$lock_dir/held" "$ready" \
+    "$_SERVER_LIFECYCLE_LOCK_PID" &
+  _SERVER_LIFECYCLE_LOCK_HOLDER=$!
+  while [[ ! -s "$ready" && "$spins" -lt 500 ]]; do
+    if ! kill -0 "$_SERVER_LIFECYCLE_LOCK_HOLDER" 2>/dev/null; then
+      wait "$_SERVER_LIFECYCLE_LOCK_HOLDER" 2>/dev/null || true
+      _SERVER_LIFECYCLE_LOCK_HOLDER=""
+      return 1
+    fi
+    sleep 0.02
+    spins=$((spins + 1))
+  done
+  [[ -s "$ready" ]]
+}
+
+_stop_server_lifecycle_lock_holder() {
+  local pid="${_SERVER_LIFECYCLE_LOCK_HOLDER:-}" spins=0
+  [[ -n "$pid" ]] || return 0
+  _SERVER_LIFECYCLE_LOCK_HOLDER=""
+  kill "$pid" 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null && [[ "$spins" -lt 20 ]]; do
+    sleep 0.05
+    spins=$((spins + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
+_discard_server_lifecycle_lock_dir() {
+  local lock_dir="${1:-}"
+  [[ -n "$lock_dir" ]] || return 0
+  _stop_server_lifecycle_lock_holder
+  rm -f "$lock_dir/owner.json" "$lock_dir/held" "$lock_dir/holder.ready"
+  rmdir "$lock_dir" 2>/dev/null || true
+}
+
 _acquire_server_lifecycle_lock() {
   local runtime_dir lock_dir owner_file state attempts=0 invalid_attempts=0
   local state_kind stale_pid stale_nonce stale_digest reclaim_result
@@ -3931,12 +4043,20 @@ _acquire_server_lifecycle_lock() {
   _current_shell_pid || return 1
   _SERVER_LIFECYCLE_LOCK_PID="$_CURRENT_SHELL_PID"
   _SERVER_LIFECYCLE_LOCK_DIR="$lock_dir"
+  _SERVER_LIFECYCLE_LOCK_HOLDER=""
 
   while [[ "$attempts" -lt "${VIBECRAFTED_LIFECYCLE_LOCK_TICKS:-100}" ]]; do
     if mkdir "$lock_dir" 2>/dev/null; then
+      # Publish the flock before owner.json. A peer that only sees the
+      # directory waits; once the owner record exists, the flock proves this
+      # shell is alive even if /proc calls the pid a zombie.
+      if ! _start_server_lifecycle_lock_holder "$lock_dir"; then
+        _discard_server_lifecycle_lock_dir "$lock_dir"
+        return 1
+      fi
       if ! _server_python lock-owner-write \
         "$owner_file" "$_SERVER_LIFECYCLE_LOCK_PID" "$_SERVER_LIFECYCLE_LOCK_NONCE"; then
-        rmdir "$lock_dir" 2>/dev/null || true
+        _discard_server_lifecycle_lock_dir "$lock_dir"
         return 1
       fi
       return 0
@@ -3945,9 +4065,14 @@ _acquire_server_lifecycle_lock() {
     case "$state" in
       live:*)
         invalid_attempts=0
+        attempts=0
         sleep 0.05
         ;;
-      initializing|invalid)
+      initializing)
+        invalid_attempts=0
+        sleep 0.05
+        ;;
+      invalid)
         invalid_attempts=$((invalid_attempts + 1))
         if [[ "$invalid_attempts" -lt 20 ]]; then
           sleep 0.05
@@ -3971,6 +4096,10 @@ _acquire_server_lifecycle_lock() {
           if [[ "$reclaim_result" == reclaimed:* ]]; then
             printf "Recovered stale server lifecycle lock; retained owner evidence at %s.\n" \
               "${reclaim_result#reclaimed:}"
+          elif [[ "$reclaim_result" == "held" ]]; then
+            invalid_attempts=0
+            attempts=0
+            sleep 0.05
           elif [[ "$reclaim_result" != "changed" ]]; then
             printf "%b✗%b Lifecycle lock recovery returned an invalid result; refusing mutation.\n" \
               "$_red" "$_reset" >&2
@@ -3998,15 +4127,18 @@ _acquire_server_lifecycle_lock() {
 }
 
 _release_server_lifecycle_lock() {
-  local owner_file
+  local owner_file lock_dir
   [[ -n "${_SERVER_LIFECYCLE_LOCK_DIR:-}" ]] || return 0
-  owner_file="$_SERVER_LIFECYCLE_LOCK_DIR/owner.json"
+  lock_dir="$_SERVER_LIFECYCLE_LOCK_DIR"
+  owner_file="$lock_dir/owner.json"
   if _server_python lock-owned \
     "$owner_file" "$_SERVER_LIFECYCLE_LOCK_PID" "$_SERVER_LIFECYCLE_LOCK_NONCE" \
     >/dev/null 2>&1; then
-    rm -f "$owner_file"
-    rmdir "$_SERVER_LIFECYCLE_LOCK_DIR" 2>/dev/null || true
+    rm -f "$owner_file" "$lock_dir/held" "$lock_dir/holder.ready"
+    rmdir "$lock_dir" 2>/dev/null || true
+    _stop_server_lifecycle_lock_holder
   else
+    _stop_server_lifecycle_lock_holder
     printf "%b✗%b Lifecycle lock ownership changed; retaining evidence at %s\n" \
       "$_red" "$_reset" "$owner_file" >&2
     return 1
