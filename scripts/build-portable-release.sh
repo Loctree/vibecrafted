@@ -16,7 +16,14 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${VIBECRAFTED_RELEASE_DIR:-$REPO_ROOT/dist}"
-OWNER_REPO="${VIBECRAFTED_RELEASE_REPO:-vetcoders/vibecrafted}"
+# The owner comes from the running repository (the repo moved orgs), so the
+# explicit pair always agrees with the Git provider; env still overrides.
+_origin_slug="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null \
+  | sed -E 's#^(git@[^:]+:|https?://([^/@]+@)?[^/]+/|ssh://[^/]+/)##; s#\.git$##' || true)"
+if [[ ! "$_origin_slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+  _origin_slug="vetcoders/vibecrafted"
+fi
+OWNER_REPO="${VIBECRAFTED_RELEASE_REPO:-${GITHUB_REPOSITORY:-$_origin_slug}}"
 VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/VERSION")"
 RELEASE_DATE="${VIBECRAFTED_RELEASE_DATE:-$(date -u +%Y%m%d)}"
 ROOT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
