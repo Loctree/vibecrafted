@@ -75,8 +75,9 @@ curl -fsSL https://vibecrafted.io/install.sh | bash
 ```
 
 The bootstrap installs the release bound by the website channel manifest; it
-does not follow a Git branch. Confirm what you received with
-`vibecrafted --version`.
+does not follow a Git branch. That channel is a different publisher from this
+checkout's `VERSION` and from GitHub Releases. `vc-dou --floor` fails when the
+three disagree. Confirm what you received with `vibecrafted --version`.
 
 The installer detects your platform and Linux distribution family first, reports
 every missing prerequisite in one pass instead of failing one tool at a time,
