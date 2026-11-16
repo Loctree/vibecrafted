@@ -1,10 +1,9 @@
 name: CodeQL
 
 on:
+  # No pull_request trigger: code scanning is not a required rule, and the
+  # swift leg alone takes a macOS runner per PR push. main + weekly suffice.
   push:
-    branches:
-      - main
-  pull_request:
     branches:
       - main
   schedule:
