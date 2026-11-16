@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .package_resources import skills_path
+from .local_skills import LocalSkillError, resolve_execution_skill
 from .workflow import SUPPORTED_AGENTS
 from .workflows.registry import workflow_definition, workflow_manifest
 
@@ -106,6 +106,7 @@ WORKFLOW_HELP: dict[str, WorkflowHelp] = {
         ),
         (
             'vibecrafted dou codex --prompt "Audit launch readiness"',
+            "vc-dou --floor --product loctree",
             "vc-dou claude --file /path/to/product-scope.md",
         ),
     ),
@@ -132,6 +133,7 @@ WORKFLOW_HELP: dict[str, WorkflowHelp] = {
         ),
         (
             'vibecrafted hydrate codex --prompt "Package this for first users"',
+            "vc-hydrate --floor",
             "vc-hydrate claude --file /path/to/dou-report.md",
         ),
     ),
@@ -275,6 +277,7 @@ WORKFLOW_HELP: dict[str, WorkflowHelp] = {
         ),
         (
             'vibecrafted release codex --prompt "Prepare the release"',
+            "vc-release --floor --require-release",
             "vc-release claude --file /path/to/release-brief.md",
         ),
     ),
@@ -402,6 +405,7 @@ WORKFLOW_HELP: dict[str, WorkflowHelp] = {
 CORE_SURFACE_COMMANDS = (
     "claims",
     "message",
+    "pr-closure",
     "reinstall",
     "relocate",
     "resume-session",
@@ -435,8 +439,10 @@ def advertised_compact_verbs(version: str = "test") -> tuple[str, ...]:
 def _skill_version(topic: str) -> str:
     """Read the ``version:`` frontmatter field from the topic's SKILL.md, or "" if absent."""
     try:
-        path = skills_path() / f"vc-{topic}" / "SKILL.md"
+        path = resolve_execution_skill(f"vc-{topic}")
         lines = path.read_text(encoding="utf-8").splitlines()
+    except LocalSkillError:
+        return ""
     except (FileNotFoundError, OSError):
         return ""
     for line in lines[1:40]:
@@ -471,6 +477,7 @@ Commands:
   status               Today's agent activity
   doctor               Installation health — pass/fail
   receipt              Delivery/runtime receipt (source ↔ installed)
+  pr-closure           Portable JSON PR preparation, verification receipts and admission
   scaffold-doctor     Plan-package gate before implement handoff
   message              Persist/inspect run-addressed Codex queue receipts
   capabilities         Launcher catalog: agents, models, controls, environments (--json)
@@ -506,6 +513,16 @@ Words:
 """.lstrip("\n")
 
 
+def render_agents_help() -> str:
+    """Render the shared native help for ``vibecrafted agents`` and ``vc-agents``."""
+    return (
+        "\nVibecrafted agent helpers\n"
+        "  Use vibecrafted <skill> <agent> for workflows and "
+        "vibecrafted init <agent> to orient.\n"
+        "  Example: vibecrafted implement codex .vibecrafted/plans/my-plan.md\n\n"
+    )
+
+
 def render_message_help() -> str:
     """Render the fixed help text for ``vibecrafted message``.
 
@@ -520,6 +537,7 @@ def render_message_help() -> str:
 Usage:
   vibecrafted message (--run-id <id> | --session <id>) --file <path> \\
     [--idempotency-key <key>] [--retry] [--json]
+  vibecrafted message --connect-container --run-id <id>
   vibecrafted message --run-id <id> --receive
   vibecrafted message --run-id <id> --ack <message-id>
   vibecrafted message --inspect <message-id>
@@ -533,6 +551,7 @@ Options:
   --ack <message-id>       Recipient claims receipt of one inbox message
   --idempotency-key <key>  Replay key; same body+run is a receipt replay
   --retry                  Resubmit only unresolved or failed receipts
+  --connect-container      Attach a client to the selected live host container run
   --inspect <message-id>   Read one durable receipt (JSON)
   --mark-context-injected <message-id>
                            Record that the text was attached to a tool response

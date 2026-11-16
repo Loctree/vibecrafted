@@ -1,4 +1,4 @@
-# Cut 4.4.0 with six carriers
+# Cut 4.5.2 with six carriers
 
 This is the Agent-Operator preparation sequence. Merging into `main`, creating
 and pushing the release tag, publication, and replacing a live App remain
@@ -7,19 +7,19 @@ Founder actions. [RELEASE_KICKOFF.md](RELEASE_KICKOFF.md) defines the product;
 
 ## 0. One immutable release
 
-One GitHub Release `v4.4.0` carries one framework commit and one recorded
-terminal/Frame donor tuple. `VERSION` is already `4.4.0`.
+One GitHub Release `v4.5.2` carries one framework commit and one recorded
+terminal/Frame donor tuple. `VERSION` is already `4.5.2`.
 
 The publisher's closed allowlist contains **16 assets**:
 
 | Carrier or receipt                                                    | Required sidecars | Evidence                              |
 | --------------------------------------------------------------------- | ----------------- | ------------------------------------- |
-| `Vibecrafted_4.4.0-<YYYYMMDD>-<sha8>.dmg`                             | `.sha256`         | signed, notarized, stapled macOS App  |
-| `Vibecrafted_RuntimePack_4.4.0-<YYYYMMDD>-<sha8>-darwin-arm64.tar.gz` | `.sha256`, `.sig` | same signed macOS runtime             |
-| `Vibecrafted_4.4.0-<YYYYMMDD>-<sha8>-portable.tar.gz`                 | `.sha256`         | provenance-bound source distribution  |
-| `Vibecrafted_4.4.0-<YYYYMMDD>-<sha8>-windows-x64.msi`                 | `.sha256`         | Windows per-user installer            |
-| `Vibecrafted_4.4.0-<YYYYMMDD>-<sha8>-windows-x64.exe`                 | `.sha256`         | Windows setup executable              |
-| `Vibecrafted_RuntimePack_4.4.0-<YYYYMMDD>-<sha8>-win32-x64.tar.gz`    | `.sha256`, `.sig` | product-key-signed Windows runtime    |
+| `Vibecrafted_4.5.1-<YYYYMMDD>-<sha8>.dmg`                             | `.sha256`         | signed, notarized, stapled macOS App  |
+| `Vibecrafted_RuntimePack_4.5.1-<YYYYMMDD>-<sha8>-darwin-arm64.tar.gz` | `.sha256`, `.sig` | same signed macOS runtime             |
+| `Vibecrafted_4.5.1-<YYYYMMDD>-<sha8>-portable.tar.gz`                 | `.sha256`         | provenance-bound source distribution  |
+| `Vibecrafted_4.5.1-<YYYYMMDD>-<sha8>-windows-x64.msi`                 | `.sha256`         | Windows per-user installer            |
+| `Vibecrafted_4.5.1-<YYYYMMDD>-<sha8>-windows-x64.exe`                 | `.sha256`         | Windows setup executable              |
+| `Vibecrafted_RuntimePack_4.5.1-<YYYYMMDD>-<sha8>-win32-x64.tar.gz`    | `.sha256`, `.sig` | product-key-signed Windows runtime    |
 | `release-output.json`                                                 | `.sig`            | source tuple and bound macOS carriers |
 
 Sidecars append their suffix to the complete carrier filename.
@@ -36,7 +36,7 @@ The portable archive is a source distribution, not proof of a native runtime.
 Inspect the exact source and donor commits before any build:
 
 ```bash
-test "$(tr -d '[:space:]' < VERSION)" = "4.4.0"
+test "$(tr -d '[:space:]' < VERSION)" = "4.5.2"
 git status --porcelain
 git rev-parse HEAD
 git -C ../vc-terminal status --porcelain
@@ -48,6 +48,13 @@ make test-core
 make semgrep
 make test-source
 ```
+
+`vc-dou --floor` and `vc-release --floor` are not green at this point.
+`channel` and `github_release` are `dou = fail` and `release = fail` until the
+website channel and the GitHub Release name this `VERSION`. Running either
+command here fails for that reason, and `make publish-release` refuses to
+start when `vc-release --floor` exits 1. Section 6 is the order that makes
+the ship gate pass: move the channel first, then run the floor, then publish.
 
 Run pytest with `PYTHONPATH` unset and an isolated `VIBECRAFTED_HOME`.
 `tests/tui` and `vibecrafted-core/tests` require separate pytest invocations.
@@ -145,7 +152,7 @@ uv run --project vibecrafted-core verify-vibecrafted-walkaround verify-release \
 uv run --project vibecrafted-core verify-vibecrafted-walkaround walkaround \
   --release-output dist/release-output.json \
   --signature dist/release-output.json.sig \
-  --output dist/vibecrafted-4.4.0-walkaround.json
+  --output dist/vibecrafted-4.5.1-walkaround.json
 ```
 
 Verify each checksum, detached Runtime Pack signature, DMG staple and
@@ -179,8 +186,8 @@ RELEASE_SHA="$(git rev-parse HEAD)"
 gh workflow run gate-rehearsal.yml --ref main
 # Wait for success on exactly RELEASE_SHA, then admit immediately before tagging.
 bash scripts/check-release-rehearsal.sh "$RELEASE_SHA" && \
-  git tag -a v4.4.0 -m "Vibecrafted 4.4.0" "$RELEASE_SHA"
-git push origin v4.4.0
+  git tag -a v4.5.2 -m "Vibecrafted 4.5.1" "$RELEASE_SHA"
+git push origin v4.5.2
 gh run list --workflow release.yml --commit "$(git rev-parse HEAD)"
 ```
 
@@ -228,33 +235,52 @@ each need their own receipt.
 `https://vibecrafted.io` is not published from this repository. The site,
 `install.sh`, `install.ps1`, `channel/main.json`, `SHA256SUMS`,
 `vibecrafted-signing.pub` and the `vibecrafted-v<version>.tar.gz` archive come
-from `VetCoders/vibecrafted-io` (`make site-release`, which rsyncs the built
+from `vetcoders/vibecrafted-io` (`make site-release`, which rsyncs the built
 site to the Caddy host). Its `scripts/sync-docs.sh` mirrors this repository's
 `docs/public/` into the site at build time. Here, `docs/index.html` is only a
 redirect stub, `docs/CNAME` is historical, and `.github/workflows/static.yml`
 is disabled; none of them serve the domain.
 
-`make publish-release` does not update the website. A GitHub Release can
-therefore be newer than what `curl -fsSL https://vibecrafted.io/install.sh | bash`
-installs. On 2026-10-14 the website channel named `4.1.0`, and its `install.sh`
-was byte-identical to the one at tag `v4.1.0`.
+`make publish-release` does not update the website, and it refuses to
+start when `vc-release --floor` exits 1. A GitHub Release can therefore be
+a different version from what `curl -fsSL https://vibecrafted.io/install.sh | bash`
+installs. The floor compares `VERSION`, the channel, GitHub Releases, and the
+site metadata; a historical channel reading is not a current version.
+
+Ship order for this repository:
+
+1. Publish the website channel from `vetcoders/vibecrafted-io`
+   (`make site-release` there) so `channel/main.json` and the site metadata
+   name this `VERSION`. Do not run `make site-release` from this tree.
+2. `vc-release --floor` in this checkout. A missing GitHub Release for the
+   tag being cut is a warning, because the next step creates it. Channel or
+   registry disagreement is still a failure. A known gap is
+   `make publish-release ACKNOWLEDGE="<surface-id>"`, which forwards only
+   surface ids.
+3. `make publish-release`.
+4. `vc-dou --floor` after the Release exists. It stays red until the channel,
+   the site, and the GitHub Release all name this `VERSION`. That is the
+   definition-of-undone check, not a preflight that can pass before step 1.
 
 This tree's `install.sh` accepts a channel only when:
 
-- `channel/main.json` binds top-level `archive_url` and `runtime_pack_url`;
-  otherwise it stops with
-  `Channel manifest must bind archive_url and runtime_pack_url`;
+- `channel/main.json` binds top-level `archive_url`, and each supported host
+  binds `platforms.<os>-<architecture>.runtime_pack_url` to its real pack;
+  e.g. `platforms.linux-arm64.runtime_pack_url`. A source-only platform entry
+  does not advertise a prebuilt runtime;
 - the archive at `archive_url` carries a closed `source-provenance.json`
   (the portable tarball, or `scripts/distribution_manifest.py archive`
   output); a plain `tar` of a checkout is refused;
-- `runtime_pack_url` has adjacent `.sha256` and `.sig` files;
+- every selected `runtime_pack_url` has adjacent `.sha256` and `.sig` files;
 - `SHA256SUMS` and `vibecrafted-signing.pub` sit beside `archive_url`.
   Without them the archive's checksum and signature checks are skipped with a
   warning.
 
-The bootstrap reads one `runtime_pack_url` for every host; it does not select a
-per-platform pack. Bind only a pack that installs on every platform the channel
-advertises, or leave the website on its previous coherent channel.
+The bootstrap selects the host entry first. A legacy top-level URL is accepted
+only when its canonical carrier filename identifies the same host. Unsupported
+hosts stop before fetching a foreign pack. The website publisher must publish
+real, signed platform-specific packs and their sidecars before advertising them;
+a portable source archive alone is not a Runtime Pack.
 
 As measured on 2026-10-14, the site publisher meets none of the first two
 conditions: `scripts/sync_site_release_assets.py` writes no `runtime_pack_url`,

@@ -20,7 +20,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: BUSL-1.1" src="https://img.shields.io/badge/license-BUSL--1.1-blue.svg"></a>
-  <a href="VERSION"><img alt="Version 4.4.0" src="https://img.shields.io/badge/version-4.4.0-informational.svg"></a>
+  <a href="VERSION"><img alt="Version 4.5.2" src="https://img.shields.io/badge/version-4.5.2-informational.svg"></a>
   <a href="docs/INSTALL.md"><img alt="Platform: macOS, Linux, Windows native + WSL2" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20native%20%2B%20WSL2-lightgrey.svg"></a>
 </p>
 
@@ -176,7 +176,9 @@ portable archive or Windows installers. When the latest release lacks the
 carrier you need, use the bootstrap on macOS or Linux, and WSL2 on Windows.
 The bootstrap installs the version named in
 [`channel/main.json`](https://vibecrafted.io/channel/main.json), which the
-website publishes on its own schedule. Versioned carrier names below describe
+website publishes on its own schedule. The badge at the top of this file is
+`VERSION`. `vc-dou --floor` fails when `VERSION`, that channel, and the latest
+GitHub Release are not the same number. Versioned carrier names below describe
 the 4.x release contract and are usable once a release attaches them:
 
 - macOS desktop: `Vibecrafted_<version>-<YYYYMMDD>-<sha8>.dmg`
@@ -369,6 +371,11 @@ vibecrafted implement codex --prompt "Add JWT authentication"
 WRITE stage. They are not aliases (ADR-0001).
 
 Type `vibecrafted help` for the command deck, or `vc-` and hit tab once the shell helpers are installed.
+
+**Set your terminal font from the app.** In the installed Vibecrafted UI, open
+**Agents → New agent → Setup / Font** (press `f`) to reach **Terminal
+Typography** and pick a font. No source checkout or Python command is needed.
+Steps and save behavior: [Runbook §5a](docs/RUNBOOK.md#5a-terminal-typography-setup--font).
 
 When you want to walk the release surface explicitly, run:
 

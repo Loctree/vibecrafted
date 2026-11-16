@@ -56,6 +56,23 @@ def test_provider_conflict_refuses_even_with_cli_model(tmp_path):
         )
 
 
+@pytest.mark.parametrize("source", ["file", "prompt"])
+@pytest.mark.parametrize("binding", ["", "agent: codex\n"])
+def test_brief_author_is_not_the_seeded_executor(tmp_path, source, binding):
+    body = f"---\nauthor: claude\n{binding}model: exact-model\n---\ntask\n"
+    plan = tmp_path / "plan.md"
+    plan.write_text(body, encoding="utf-8")
+    selected = spec(tmp_path, **{source: str(plan) if source == "file" else body})
+    assert selected.agent == "codex"
+    assert selected.model == "exact-model"
+    assert workflow._source_prompt(selected) == body
+
+
+def test_author_does_not_override_conflicting_executor_binding(tmp_path):
+    with pytest.raises(ValueError, match="agent.*conflict"):
+        spec(tmp_path, prompt="---\nauthor: codex\nagent: claude\n---\ntask")
+
+
 def test_inline_whitespace_preserved(tmp_path):
     body = '  Żółć\n"hello" $(false)\n\n'
     assert spec(tmp_path, prompt=body).prompt == body
@@ -307,6 +324,47 @@ def test_dispatch_plan_model_selection(tmp_path, override, expected, origin):
     assert cut.model_source == origin
 
 
+def test_dispatch_brief_author_survives_canonical_launch_seed(tmp_path, monkeypatch):
+    import json
+
+    from vibecrafted_core.dispatch import supervisor
+    from vibecrafted_core.dispatch.schema import DispatchSchemaError, parse_dispatch
+
+    plan = tmp_path / "plan.md"
+    body = "---\nauthor: claude\nmodel: from-plan\n---\ntask\n"
+    plan.write_text(body, encoding="utf-8")
+    source = (
+        Path(__file__).parent / "dispatch" / "fixtures" / "minimal.dispatch.toml"
+    ).read_text()
+    source = source.replace("/tmp/vibecrafted-dispatch-fixture", str(tmp_path))
+    source = source.replace(
+        'prompt = "Implement parser cut {id} in {repo}."',
+        "brief = " + json.dumps(str(plan)),
+    )
+    dispatch = parse_dispatch(source)
+    cut = dispatch.cuts[0]
+    captured = {}
+
+    def capture_launch(spec, *_args, **_kwargs):
+        captured["spec"] = spec
+        return {"accepted": True, "run_id": "fixture"}
+
+    monkeypatch.setattr(supervisor, "launch_workflow", capture_launch)
+    result = supervisor.workflow_cell_launcher(dispatch)(
+        cut, "rendered task", "initial"
+    )
+    assert result.accepted
+    assert captured["spec"].agent == "codex"
+    assert captured["spec"].model == "from-plan"
+    assert captured["spec"].plan_source == body
+    assert captured["spec"].source_path == str(plan)
+    assert plan.read_text(encoding="utf-8") == body
+
+    plan.write_text(body.replace("author: claude", "author: codex\nagent: claude"))
+    with pytest.raises(DispatchSchemaError, match="agent.*conflict"):
+        parse_dispatch(source)
+
+
 def test_agy_is_admitted_like_every_other_agent(tmp_path, monkeypatch):
     """The agy adapter now carries the prompt on stdin (stream-json), so the
     launch contract admits it and proceeds to the shared pre-flight."""
@@ -509,15 +567,15 @@ def test_interactive_admission_snapshot_and_private_command(
 
 
 @pytest.mark.parametrize(
-    "skill,attached,provider_exit,provider_name,effort,shell",
+    "skill,attached,provider_exit,provider_name,effort,shell,permission_case",
     [
-        (skill, attached, exit_code, "codex", "high", "bash")
+        (skill, attached, exit_code, "codex", "high", "bash", None)
         for skill in ("init", "partner", "operator", "resume")
         for attached in (False, True)
         for exit_code in (0, 7)
     ]
     + [
-        ("init", True, 0, provider, "medium", shell)
+        ("init", True, 0, provider, "medium", shell, None)
         for provider in (
             "codex",
             "claude",
@@ -529,10 +587,72 @@ def test_interactive_admission_snapshot_and_private_command(
             "cursor",
         )
         for shell in ("bash", "zsh")
+    ]
+    + [
+        pytest.param(
+            skill,
+            True,
+            0,
+            "claude",
+            "medium",
+            shell,
+            permission_case,
+            id=f"durable-{skill}-{shell}-{permission_case[0]}",
+        )
+        for skill in ("init", "partner", "operator")
+        for shell in ("bash", "zsh")
+        for permission_case in (
+            (
+                "ui",
+                '[runtime.picking]\npermissions = "read-only"\n',
+                "",
+                "read-only",
+                "config:global",
+            ),
+            (
+                "conflict",
+                'permissions = "bypass"\n[runtime.picking]\npermissions = "read-only"\n',
+                "",
+                "read-only",
+                "config:global",
+            ),
+            (
+                "agent",
+                '[runtime.picking]\npermissions = "read-only"\n[agents.claude]\npermissions = "bypass"\n',
+                "",
+                "bypass",
+                "config:agents.claude",
+            ),
+            (
+                "explicit",
+                '[runtime.picking]\npermissions = "read-only"\n[agents.claude]\npermissions = "bypass"\n',
+                "auto",
+                "auto",
+                "dispatch",
+            ),
+            (
+                "cleared",
+                'permissions = "bypass"\n[runtime.picking]\npermissions = ""\n',
+                "",
+                "auto",
+                "default",
+            ),
+            ("legacy", 'permissions = "read-only"\n', "", "read-only", "config:global"),
+            ("default", "", "", "auto", "default"),
+            ("malformed", "[runtime.picking]\npermissions = false\n", "", "", ""),
+        )
     ],
 )
 def test_public_interactive_shell_pty_admission(
-    tmp_path, monkeypatch, skill, attached, provider_exit, provider_name, effort, shell
+    tmp_path,
+    monkeypatch,
+    skill,
+    attached,
+    provider_exit,
+    provider_name,
+    effort,
+    shell,
+    permission_case,
 ):
     import json
     import os
@@ -590,6 +710,15 @@ raise SystemExit(int(os.environ['PROVIDER_EXIT']))
 """
     )
     provider.chmod(0o700)
+    config = tmp_path / "config" / "vibecrafted" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config_body = permission_case[1] if permission_case else ""
+    config.write_text(config_body)
+    permission_flags = (
+        f" --permissions {permission_case[2]}"
+        if permission_case and permission_case[2]
+        else ""
+    )
     body = f'\ufeff---\r\nagent: {provider_name}\r\nmodel: exact-{provider_name}\r\n---\r\n Żółć "quoted"\r\n\r\n'
     plan = tmp_path / "plan.md"
     plan.write_bytes(body.encode())
@@ -619,10 +748,12 @@ _vetcoders_prepare_operator_runtime() { export VIBECRAFTED_OPERATOR_SESSION=fixt
 _vetcoders_spawn_into_operator_session() { _vetcoders_exec_admitted_interactive "$2"; }
 _vetcoders_attach_prepared_vc_frame_session() { return 0; }
 """
+    script += "\nlaunch_status=0\n"
     if skill == "resume":
-        script += f'_vetcoders_resume_agent codex --session 11111111-2222-4333-8444-555555555555 --repo "$FIXTURE_REPO" --model exact-codex --effort {effort} --token-budget unmetered\n'
+        script += f'_vetcoders_resume_agent codex --session 11111111-2222-4333-8444-555555555555 --repo "$FIXTURE_REPO" --model exact-codex --effort {effort} --token-budget unmetered || launch_status=$?\n'
     else:
-        script += f'_vetcoders_skill_{skill} {provider_name} --repo "$FIXTURE_REPO" --file "$FIXTURE_PLAN" --effort {effort} --token-budget unmetered\n'
+        script += f'_vetcoders_skill_{skill} {provider_name} --repo "$FIXTURE_REPO" --file "$FIXTURE_PLAN" --effort {effort} --token-budget unmetered{permission_flags} || launch_status=$?\n'
+    script += '\nprintf "fixture-shell-usable\\n"\nexit "$launch_status"\n'
     env = {
         **os.environ,
         "FIXTURE_PYTHON": sys.executable,
@@ -635,6 +766,7 @@ _vetcoders_attach_prepared_vc_frame_session() { return 0; }
         "HOME": str(tmp_path / "provider-home"),
         "PROVIDER_CAPTURE": str(capture),
         "PROVIDER_EXIT": str(provider_exit),
+        "XDG_CONFIG_HOME": str(config.parent.parent),
         "VIBECRAFTED_RUN_ID": "work-parent",
         "VIBECRAFTED_RUNTIME_BIN": str(bin_dir),
         "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
@@ -683,12 +815,23 @@ _vetcoders_attach_prepared_vc_frame_session() { return 0; }
                 output.extend(data)
             if proc.poll() is not None:
                 break
-        assert (proc.wait(timeout=2) == 0) == (supported and provider_exit == 0), (
-            output.decode(errors="replace")
-        )
+        permission_invalid = permission_case and permission_case[0] == "malformed"
+        assert (proc.wait(timeout=2) == 0) == (
+            supported and provider_exit == 0 and not permission_invalid
+        ), output.decode(errors="replace")
         assert all(
             parent_path.read_bytes() == parent_bytes for parent_path in parent_paths
         )
+        assert "fixture-shell-usable" in output.decode(errors="replace")
+        assert config.read_text() == config_body
+        if permission_invalid:
+            assert "runtime.picking.permissions" in output.decode(errors="replace")
+            assert not capture.exists()
+            assert (
+                list(control_plane.control_plane_home().glob("runtime_runs/init-*"))
+                == []
+            )
+            return
         if not supported:
             assert (
                 f"Effort is unavailable for provider {provider_name}" in output.decode()
@@ -731,6 +874,26 @@ _vetcoders_attach_prepared_vc_frame_session() { return 0; }
             assert receipt["effort_source"] == "cli"
             assert receipt["effort_override_supported"] is True
             assert receipt["effort_override_skipped"] is False
+        if permission_case:
+            _, _, override, effective, source = permission_case
+            controls = admission["execution_controls"]
+            assert controls == meta["execution_controls"]
+            assert controls["permissions_effective"] == effective
+            assert controls["permissions_source"] == source
+            assert controls["permissions_requested"] == (
+                "" if source == "default" else override or effective
+            )
+            assert controls["permissions_reason"] == ""
+            native_mode = {
+                "auto": "auto",
+                "read-only": "plan",
+                "bypass": "bypassPermissions",
+            }[effective]
+            assert (
+                result["argv"][result["argv"].index("--permission-mode") + 1]
+                == native_mode
+            )
+            assert controls["provider_flags"] == ["--permission-mode", native_mode]
         assert meta["status"] == ("completed" if provider_exit == 0 else "failed")
         assert "fixture-provider-completed" in Path(meta["transcript"]).read_text()
         assert body not in Path(meta["transcript"]).read_text()

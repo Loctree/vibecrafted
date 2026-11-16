@@ -279,13 +279,17 @@ class WorktreeManager:
             raise WorktreeContractError(
                 f"active recovery worktree is not owned by selected repository: {root}"
             )
-        registered_roots = [
-            line.removeprefix("worktree ")
-            for line in _git(
-                self.main_repo, "worktree", "list", "--porcelain"
-            ).splitlines()
-            if line.startswith("worktree ")
-        ]
+        # `git worktree list` can miss a checkout that another `worktree add`
+        # is still publishing. The same lock that covers add/remove/prune
+        # makes this proof wait for that publication.
+        with _worktree_metadata_lock(self.main_repo):
+            registered_roots = [
+                line.removeprefix("worktree ")
+                for line in _git(
+                    self.main_repo, "worktree", "list", "--porcelain"
+                ).splitlines()
+                if line.startswith("worktree ")
+            ]
         if not any(
             _same_filesystem_location(candidate, root) for candidate in registered_roots
         ):

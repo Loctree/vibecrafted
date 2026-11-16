@@ -1,6 +1,6 @@
 [project]
 name = "vibecrafted"
-version = "4.4.0"
+version = "4.5.2"
 description = "Core Python library for Vibecrafted runtime and synthesis surfaces."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -66,6 +66,7 @@ artifacts = [
     "vibecrafted_core/schemas/**",
     "vibecrafted_core/trust/**",
     "vibecrafted_core/config/vc-frame/**",
+    "vibecrafted_core/public_surfaces/**",
 ]
 
 [tool.hatch.build.targets.wheel]

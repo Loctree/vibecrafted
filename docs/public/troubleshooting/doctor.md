@@ -115,6 +115,8 @@ Default doctor does **not** ask GitHub anything. That is why VERSION could sit a
 
 Mismatch, a missing release, or a non-success source-gate conclusion is **red** and names the operator button: **tag/publish**. Missing `gh` is a loud **warn**, never a silent skip and never a fake green. The probe is off the public network in unit tests; it only talks to GitHub when you actually run `--release`.
 
+Doctor's release valve is Vibecrafted-only and stops at GitHub. The pipeline floor is wider: `vc-dou --floor` compares every configured public surface (registries, installer channel, site metadata, Homebrew, README install path, brand spelling, tags without a Release) for any product in `packaging/public-surfaces/`. A green `doctor --release` does not mean those surfaces agree.
+
 ## Reading the output
 
 - **Pass (green / ok)** — the install is bound, hashed, and checkout-free. A healthy install reports on the order of 100+ ok with 0 failures.
@@ -141,6 +143,29 @@ vibecrafted doctor --fix-server-service     # reconcile the LaunchAgent with the
 ```
 
 Each fix flag re-verifies after repairing, so a clean exit means the repair actually held.
+
+## Terminal fonts
+
+Open **Agents → New agent → Setup / Font (f)**. The existing chooser shows the
+current policy and lists available Monaspace NF families first, followed by other
+installed fixed-width families. On macOS, CoreText fixed-pitch traits determine
+eligibility; a family name containing “Mono” is not evidence. Upstream family
+names are retained.
+
+Use arrows, Page Up/Down, Home/End, or the mouse wheel to browse. Clicking a row
+selects it; **Apply Font** or Enter applies it. Opening, browsing and cancelling
+leave the policy unchanged. An unavailable or proportional configured family
+remains visible as current, but cannot be chosen as an installed fixed-width
+font. Applying another family updates normal/bold/italic face styles and keeps
+font size, offsets and unrelated preferences.
+
+Frame's direct entry uses the canonical Workshop script with `launcher --font`;
+it opens the same typography scene without provider authentication. Esc closes
+that direct chooser. `--onboarding` still opens the two-step setup flow.
+Non-macOS hosts show curated Monaspace file matches as unavailable diagnostics.
+A filename cannot verify fixed width or face styles, so it cannot authorize a
+new selection. Existing policy and styles are preserved. Catalogue availability describes
+CoreText discovery, not verification of a running terminal renderer.
 
 ## Terminal startup recovery
 

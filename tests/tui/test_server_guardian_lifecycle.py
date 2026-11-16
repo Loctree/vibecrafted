@@ -1285,6 +1285,42 @@ def test_concurrent_server_starts_create_exactly_one_managed_pair(
     assert stopped.returncode == 0, stopped.stderr
 
 
+def test_lifecycle_lock_claim_does_not_trust_mkdir_exit_status(
+    isolated_server_runtime: tuple[dict[str, str], Path, Path],
+) -> None:
+    # Ubuntu 26.04 ships uutils mkdir(1), which exits 0 when it loses a
+    # concurrent create of the same directory. Two racing starts then both
+    # believed they held the lifecycle lock. Model that loser: the directory
+    # is already claimed and mkdir(1) still reports success.
+    env, state_dir, lifecycle_log = isolated_server_runtime
+    bin_dir = Path(env["PATH"].split(os.pathsep, 1)[0])
+    _write_executable(
+        bin_dir / "mkdir",
+        '#!/bin/sh\n/bin/mkdir "$@" 2>/dev/null\nexit 0\n',
+    )
+    lock_dir = state_dir / "lifecycle.lock"
+    lock_dir.mkdir(parents=True)
+    contended_env = env.copy()
+    contended_env["VIBECRAFTED_LIFECYCLE_LOCK_TICKS"] = "3"
+
+    result = _run_launcher(
+        contended_env,
+        "server",
+        "start",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(_free_port()),
+    )
+
+    assert result.returncode == 75, result.stderr
+    assert "Timed out waiting for server lifecycle lock" in result.stderr
+    assert list(lock_dir.iterdir()) == []
+    assert not lifecycle_log.exists() or "server-start" not in (
+        lifecycle_log.read_text(encoding="utf-8")
+    )
+
+
 def test_manual_stop_serializes_against_concurrent_supervisor_acquire(
     isolated_server_runtime: tuple[dict[str, str], Path, Path],
 ) -> None:
