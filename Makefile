@@ -104,6 +104,10 @@ RUNTIME_PACK_SIGNATURE ?=
 RUNTIME_PACK_CARRIER_BASENAME ?=
 RUNTIME_PACK_BOOTSTRAP_INSTALLER ?=
 RUNTIME_PACK_BOOTSTRAP_SHA256 ?=
+RUNTIME_PACK_RESOLVE_PREFERENCE ?=
+RUNTIME_PACK_PREFERENCE_CURRENT_SHA256 ?=
+RUNTIME_PACK_PREFERENCE_INCOMING_SHA256 ?=
+RUNTIME_PACK_PREFERENCE_PATH ?=
 KEYS ?= $(HOME)/.keys
 # Extra builder flags, e.g. RELEASE_FLAGS=--snapshot-donors to build from
 # detached worktrees at each donor HEAD instead of refusing a dirty donor.
@@ -299,10 +303,37 @@ voc-core-contract-gate:
 	@env -u PYTHONPATH -u PYTHONHOME uv run --project vibecrafted-core --with pytest \
 		python -m pytest tests/tui/test_voc_core_contract.py -q
 
+# The unified gate proves source, not the caller's shell. Installer lanes and
+# installed runtimes export UV_PROJECT_ENVIRONMENT, PYTHON*, VIBECRAFTED_* roots
+# and sometimes a shared sticky TMPDIR; inherited, they redirect the core legs to
+# a foreign environment or a live workspace. Only these gate-scoped variables
+# select the core environment and the parent of the private gate root. The
+# default parent is /tmp, never the inherited TMPDIR: macOS TMPDIR is ~49 bytes
+# deep and pushes host Unix socket paths (Alacritty-<pid>.sock) past sockaddr_un. The
+# selection is launcher-only: uv consumes it, then `env -u` releases it so pytest
+# and the installer Makes it spawns fall back to their host-scoped defaults.
+UNIFIED_GATE_CORE_ENVIRONMENT ?= $(CURDIR)/vibecrafted-core/.venv
+UNIFIED_GATE_TMP_PARENT ?=
+
+define UNIFIED_GATE_HERMETIC_ENV
+gate_parent="$(UNIFIED_GATE_TMP_PARENT)"; gate_parent="$${gate_parent:-/tmp}"; \
+gate_root="$$(mktemp -d "$${gate_parent%/}/vibecrafted-unified-gate.XXXXXX")"; \
+trap 'rm -rf "$$gate_root"' EXIT; \
+for name in $$(env | sed -n 's/^\(VIBECRAFTED_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$$name"; done; \
+unset UV_PROJECT_ENVIRONMENT VIRTUAL_ENV UV_PYTHON PYTHONPATH PYTHONHOME; \
+mkdir -m 700 "$$gate_root/tmp" "$$gate_root/vibecrafted-home"; \
+export TMPDIR="$$gate_root/tmp" VIBECRAFTED_HOME="$$gate_root/vibecrafted-home"
+endef
+
+# The verifier self-test needs jsonschema, which only the selected core
+# environment carries; it takes that interpreter through project-python's explicit
+# PYTHON contract, never the ambient PYTHON/PATH or an unrelated checkout .venv.
 unified-product-contract-gate:
-	@$(MAKE) --no-print-directory release-version-gate
 	@set -eu; \
-	uv run --project vibecrafted-core --with pytest python -m pytest \
+	$(UNIFIED_GATE_HERMETIC_ENV); \
+	$(MAKE) --no-print-directory release-version-gate; \
+	UV_PROJECT_ENVIRONMENT="$(UNIFIED_GATE_CORE_ENVIRONMENT)" \
+	uv run --project vibecrafted-core --with pytest env -u UV_PROJECT_ENVIRONMENT python -m pytest \
 		tests/tui/test_unified_app_contract.py \
 		tests/tui/test_makefile_installer_contract.py \
 		tests/tui/test_installer_kit.py \
@@ -312,17 +343,19 @@ unified-product-contract-gate:
 		tests/tui/test_installer_uninstall.py \
 		tests/tui/test_staged_tools_sync.py \
 		tests/tui/test_uv_bootstrap.py -q; \
-	uv run --project vibecrafted-core --with pytest python -m pytest \
+	UV_PROJECT_ENVIRONMENT="$(UNIFIED_GATE_CORE_ENVIRONMENT)" \
+	uv run --project vibecrafted-core --with pytest env -u UV_PROJECT_ENVIRONMENT python -m pytest \
 		vibecrafted-core/tests/test_walkaround_distribution.py \
 		vibecrafted-core/tests/test_package_layout.py \
 		vibecrafted-core/tests/test_doctor.py \
 		vibecrafted-core/tests/test_runtime_receipt.py -q; \
-	bash scripts/verify-vibecrafted-product.sh --self-test; \
+	core_env='$(subst ','\'',$(UNIFIED_GATE_CORE_ENVIRONMENT))'; \
+	case "$$core_env" in /*) ;; *) core_env='$(subst ','\'',$(CURDIR))'"/$$core_env" ;; esac; \
+	PYTHON="$$core_env/bin/python" bash scripts/verify-vibecrafted-product.sh --self-test; \
 	$(PYTHON) -m json.tool vibecrafted-core/vibecrafted_core/schemas/unified_product.schema.v1.json >/dev/null; \
 	$(PYTHON) -m json.tool vibecrafted-core/vibecrafted_core/trust/release-policy.v1.json >/dev/null; \
 	bash -n scripts/verify-vibecrafted-product.sh; \
-	tmp="$$(mktemp -d "$${TMPDIR:-/tmp}/vibecrafted-contract-wheel.XXXXXX")"; \
-	trap 'rm -rf "$$tmp"' EXIT; \
+	tmp="$$(mktemp -d "$$TMPDIR/vibecrafted-contract-wheel.XXXXXX")"; \
 	uv build --wheel --project vibecrafted-core --out-dir "$$tmp/dist" >/dev/null; \
 	uv venv "$$tmp/venv" >/dev/null; \
 	uv pip install --python "$$tmp/venv/bin/python" "$$tmp"/dist/vibecrafted-*.whl >/dev/null; \
@@ -448,7 +481,7 @@ install:
 			$(MAKE) --no-print-directory runtime-pack; \
 		fi; \
 	fi
-	@VIBECRAFTED_RUNTIME_PACK="$(RUNTIME_PACK)" bash "$(RUNTIME_PACK_INSTALLER)" $(if $(RUNTIME_PACK_EXPECTED_SOURCE_REVISION),--expected-source-revision "$(RUNTIME_PACK_EXPECTED_SOURCE_REVISION)") $(if $(RUNTIME_PACK_CHECKSUM),--checksum "$(RUNTIME_PACK_CHECKSUM)") $(if $(RUNTIME_PACK_SIGNATURE),--signature "$(RUNTIME_PACK_SIGNATURE)") $(if $(RUNTIME_PACK_CARRIER_BASENAME),--carrier-basename "$(RUNTIME_PACK_CARRIER_BASENAME)") $(if $(RUNTIME_PACK_BOOTSTRAP_INSTALLER),--bootstrap-installer "$(RUNTIME_PACK_BOOTSTRAP_INSTALLER)") $(if $(RUNTIME_PACK_BOOTSTRAP_SHA256),--bootstrap-installer-sha256 "$(RUNTIME_PACK_BOOTSTRAP_SHA256)")
+	@VIBECRAFTED_RUNTIME_PACK="$(RUNTIME_PACK)" bash "$(RUNTIME_PACK_INSTALLER)" $(if $(RUNTIME_PACK_EXPECTED_SOURCE_REVISION),--expected-source-revision "$(RUNTIME_PACK_EXPECTED_SOURCE_REVISION)") $(if $(RUNTIME_PACK_CHECKSUM),--checksum "$(RUNTIME_PACK_CHECKSUM)") $(if $(RUNTIME_PACK_SIGNATURE),--signature "$(RUNTIME_PACK_SIGNATURE)") $(if $(RUNTIME_PACK_CARRIER_BASENAME),--carrier-basename "$(RUNTIME_PACK_CARRIER_BASENAME)") $(if $(RUNTIME_PACK_BOOTSTRAP_INSTALLER),--bootstrap-installer "$(RUNTIME_PACK_BOOTSTRAP_INSTALLER)") $(if $(RUNTIME_PACK_BOOTSTRAP_SHA256),--bootstrap-installer-sha256 "$(RUNTIME_PACK_BOOTSTRAP_SHA256)") $(if $(RUNTIME_PACK_RESOLVE_PREFERENCE),--resolve-preference "$(RUNTIME_PACK_RESOLVE_PREFERENCE)") $(if $(RUNTIME_PACK_PREFERENCE_CURRENT_SHA256),--preference-current-sha256 "$(RUNTIME_PACK_PREFERENCE_CURRENT_SHA256)") $(if $(RUNTIME_PACK_PREFERENCE_INCOMING_SHA256),--preference-incoming-sha256 "$(RUNTIME_PACK_PREFERENCE_INCOMING_SHA256)") $(if $(RUNTIME_PACK_PREFERENCE_PATH),--preference-path "$(RUNTIME_PACK_PREFERENCE_PATH)")
 	@bash scripts/install-foundations.sh loctree aicx prview screenscribe
 	@$(MAKE) --no-print-directory reconcile-server-service
 
@@ -893,7 +926,7 @@ init-hooks:
 		git config core.hooksPath scripts/hooks >/dev/null; \
 		chmod +x scripts/hooks/pre-commit scripts/hooks/pre-push scripts/hooks/commit-msg; \
 		command -v uv >/dev/null 2>&1 || { echo "bootstrapping uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }; \
-		uvx ruff --version >/dev/null 2>&1 || echo "  [warn] ruff unavailable via uvx"; \
+		uvx "$$(bash scripts/lib/ruff-spec.sh)" --version >/dev/null 2>&1 || echo "  [warn] pinned ruff unavailable via uvx"; \
 		command -v semgrep >/dev/null 2>&1 || uvx semgrep --version >/dev/null 2>&1 || echo "  [warn] semgrep unavailable"; \
 		npx --yes prettier --version >/dev/null 2>&1 || echo "  [warn] prettier unavailable via npx"; \
 	else \

@@ -218,6 +218,9 @@ def _print_completed(run_id: str, payload: dict[str, Any]) -> int:
         if run.get("session_id"):
             print(f"session_id={run['session_id']}")
         code = _completion_exit_code(payload)
+        denial = control_plane._report_denies_success(run)
+        if denial:
+            print(f"run_id={run_id} incomplete; {denial}", file=sys.stderr)
         if code and not control_plane._run_is_terminal(run):
             print(
                 f"run_id={run_id} non-terminal completion disagreement "
@@ -250,6 +253,7 @@ def _completion_exit_code(payload: dict[str, Any]) -> int:
         run.get("state") in SUCCESS_STATES
         and run.get("artifact_ok") is not False
         and not run.get("artifact_errors")
+        and not control_plane._report_denies_success(run)
     ):
         return 0
     return 3
@@ -350,8 +354,11 @@ def supervised_skill_main(skill: str, argv: Sequence[str] | None = None) -> int:
 
 
 def agents_main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry for `vibecrafted agents`."""
-    return supervised_skill_main("agents", argv)
+    """Render the shared native help for ``vc-agents`` on every platform."""
+    from .help_surface import render_agents_help
+
+    print(render_agents_help(), end="")
+    return 0
 
 
 def followup_main(argv: Sequence[str] | None = None) -> int:
@@ -429,7 +436,7 @@ def hydrate_main(argv: Sequence[str] | None = None) -> int:
 def marbles_main(argv: Sequence[str] | None = None) -> int:
     """CLI entry for `vibecrafted marbles`: control subcommands (pause/stop/resume/
     session/inspect/delete/gc) route to the legacy deck script; everything else
-    runs the `vc-marbles` lifecycle manifest.
+    uses the public admission path and its `vc-marbles` lifecycle owner.
     """
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] in {
@@ -442,12 +449,23 @@ def marbles_main(argv: Sequence[str] | None = None) -> int:
         "gc",
     }:
         return subprocess.call([str(deck_path()), "marbles", *args])
-    return _lifecycle_main("vc-marbles", args)
+    from .cli import main
+    from .lifecycle_control import CONTROL_VERBS
+
+    if args and args[0] in CONTROL_VERBS:
+        return _lifecycle_main("vc-marbles", args)
+    return main(["marbles", *args])
 
 
 def polarize_main(argv: Sequence[str] | None = None) -> int:
     """CLI entry for `vibecrafted polarize` (lifecycle manifest `vc-polarize`)."""
-    return _lifecycle_main("vc-polarize", argv)
+    from .cli import main
+    from .lifecycle_control import CONTROL_VERBS
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in CONTROL_VERBS:
+        return _lifecycle_main("vc-polarize", args)
+    return main(["polarize", *args])
 
 
 def prune_main(argv: Sequence[str] | None = None) -> int:

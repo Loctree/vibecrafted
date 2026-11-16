@@ -45,6 +45,9 @@ def _run_installer(
         "HOME": str(tmp_path / "home"),
         "PATH": ":".join([*map(str, path), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
         "TMPDIR": str(tmp_path),
+        # No test reaches GitHub: a missing uv falls back to pipx unless a test
+        # stages its own uv release.
+        "UV_RELEASE_BASE": f"file://{tmp_path / 'no-uv-release'}",
         **extra,
     }
     return subprocess.run(
@@ -200,6 +203,7 @@ def _fake_node_and_npm(fake_bin: Path, prefix: Path, capture: Path) -> None:
         fake_bin / "npm",
         "#!/bin/sh\n"
         "set -eu\n"
+        'if [ "$1 $2" = "prefix -g" ]; then printf "%s\\n" "${AMBIENT_PREFIX:-$(dirname "$NPM_PREFIX_BIN")}"; exit 0; fi\n'
         'printf "%s\\n" "$*" >> "$NPM_CAPTURE"\n'
         'case "$3" in\n'
         '  @loctree/loctree) names="loct loctree loctree-mcp loctree-lsp" ;;\n'
@@ -241,6 +245,124 @@ def test_loctree_and_aicx_install_from_npm_when_missing(
             f"install -g {package} --registry=https://registry.npmjs.org "
             "--@loctree:registry=https://registry.npmjs.org"
         ) in calls
+
+
+@pytest.mark.parametrize(
+    "target,names",
+    [("aicx", ("aicx", "aicx-mcp")), ("loctree", ("loct", "loctree", "loctree-mcp"))],
+)
+def test_npm_install_rechecks_new_executables_after_broken_legacy_shims(
+    tmp_path: Path, target: str, names: tuple[str, ...]
+) -> None:
+    fake_bin = tmp_path / "bin"
+    npm_bin = tmp_path / "npm-prefix/bin"
+    legacy_bin = tmp_path / "legacy-bin"
+    capture = tmp_path / "npm-args.txt"
+    _fake_node_and_npm(fake_bin, npm_bin, capture)
+    legacy_bytes = "#!/bin/sh\nexit 19\n"
+    for name in names:
+        _executable(legacy_bin / name, legacy_bytes)
+
+    # The first lookup executes and caches the broken shim. npm creates a
+    # working own-channel binary earlier on PATH during this same Bash process.
+    result = _run_installer(
+        tmp_path,
+        target,
+        path=[npm_bin, legacy_bin, fake_bin],
+        NPM_CAPTURE=str(capture),
+        NPM_PREFIX_BIN=str(npm_bin),
+        REQUIRE_FOUNDATIONS="1",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert capture.exists()
+    for name in names:
+        assert (legacy_bin / name).read_text() == legacy_bytes
+        assert (
+            subprocess.run([str(npm_bin / name), "--version"], check=False).returncode
+            == 0
+        )
+
+
+def test_private_npm_prefix_resolves_broken_ambient_shims(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    private_bin = tmp_path / "home/.vibecrafted/tools/node/bin"
+    legacy_bin = tmp_path / "legacy-bin"
+    user_bin = tmp_path / "user-bin"
+    capture = tmp_path / "npm-args.txt"
+    user_tools = tmp_path / "user-tools.txt"
+    ambient_prefix = tmp_path / "unwritable-prefix"
+    ambient_prefix.write_text("unavailable shared prefix\n")
+    _fake_node_and_npm(fake_bin, private_bin, capture)
+    _executable(legacy_bin / "loct", "#!/bin/sh\nexit 19\n")
+    _executable(legacy_bin / "loctree", "#!/bin/sh\nexit 19\n")
+    _executable(legacy_bin / "loctree-mcp", "#!/bin/sh\nexit 19\n")
+    for name in ("loctree", "loctree-mcp"):
+        _executable(
+            user_bin / name,
+            f"#!/bin/sh\nprintf '{name}\\n' >> \"$USER_TOOL_LOG\"\nexit 0\n",
+        )
+    result = _run_installer(
+        tmp_path,
+        "loctree",
+        path=[legacy_bin, user_bin, fake_bin],
+        AMBIENT_PREFIX=str(ambient_prefix),
+        NPM_CAPTURE=str(capture),
+        NPM_PREFIX_BIN=str(private_bin),
+        USER_TOOL_LOG=str(user_tools),
+        REQUIRE_FOUNDATIONS="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (private_bin / "loct").is_file()
+    assert capture.exists()
+    assert user_tools.read_text().splitlines().count("loctree") >= 2
+    assert user_tools.read_text().splitlines().count("loctree-mcp") >= 2
+
+
+@pytest.mark.parametrize("ambient_writable", [False, True])
+def test_npm_uses_writable_prefix_without_changing_user_configuration(
+    tmp_path: Path, ambient_writable: bool
+) -> None:
+    fake_bin = tmp_path / "bin"
+    ambient = tmp_path / "ambient-prefix"
+    if ambient_writable:
+        (ambient / "bin").mkdir(parents=True)
+    else:
+        ambient.write_text("unavailable shared prefix\n")
+    config = tmp_path / "user.npmrc"
+    original_config = "registry=https://private.example.invalid/\n"
+    config.write_text(original_config)
+    capture = tmp_path / "npm-args.txt"
+    _executable(fake_bin / "node")
+    _executable(
+        fake_bin / "npm",
+        "#!/bin/sh\nset -eu\n"
+        'if [ "$1 $2" = "prefix -g" ]; then printf "%s\\n" "$AMBIENT_PREFIX"; exit 0; fi\n'
+        'printf "%s\\n" "$*" >> "$NPM_CAPTURE"\n'
+        'test "$1 $2 $3" = "install -g @loctree/aicx" || exit 20\n'
+        'selected="$AMBIENT_PREFIX"\n'
+        'while [ "$#" -gt 0 ]; do if [ "$1" = --prefix ]; then shift; selected="$1"; fi; shift; done\n'
+        'mkdir -p "$selected/bin"\n'
+        'for name in aicx aicx-mcp; do printf "#!/bin/sh\\nexit 0\\n" > "$selected/bin/$name"; chmod +x "$selected/bin/$name"; done\n',
+    )
+    crafted = tmp_path / "home/.vibecrafted"
+    result = _run_installer(
+        tmp_path,
+        "aicx",
+        path=[ambient / "bin", fake_bin],
+        VIBECRAFTED_HOME=str(crafted),
+        AMBIENT_PREFIX=str(ambient),
+        NPM_CAPTURE=str(capture),
+        NPM_CONFIG_USERCONFIG=str(config),
+        REQUIRE_FOUNDATIONS="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert config.read_text() == original_config
+    expected = ambient if ambient_writable else crafted / "tools/node"
+    assert (expected / "bin/aicx").is_file()
+    assert ("--prefix" in capture.read_text()) is (not ambient_writable)
+    if not ambient_writable:
+        assert ambient.read_text() == "unavailable shared prefix\n"
 
 
 def test_a_working_foundation_is_left_exactly_as_the_user_installed_it(
@@ -456,6 +578,76 @@ def test_screenscribe_installs_from_pypi_through_pipx(
     ]
 
 
+def _uv_release(tmp_path: Path, *, checksum: str | None = None) -> Path:
+    """A file:// directory shaped like astral-sh/uv release assets for this host."""
+    target = {
+        ("Darwin", "arm64"): "aarch64-apple-darwin",
+        ("Darwin", "x86_64"): "x86_64-apple-darwin",
+        ("Linux", "x86_64"): "x86_64-unknown-linux-gnu",
+        ("Linux", "aarch64"): "aarch64-unknown-linux-gnu",
+    }[(platform.system(), platform.machine())]
+    staged = tmp_path / "uv-staged" / f"uv-{target}"
+    _executable(
+        staged / "uv",
+        "#!/bin/sh\nset -eu\n"
+        'if [ "$1 $2" = "tool dir" ]; then\n'
+        '  dirname "$SCREENSCRIBE_BIN"\n'
+        'elif [ "$1 $2" = "tool install" ]; then\n'
+        '  printf "#!/bin/sh\\nexit 0\\n" > "$SCREENSCRIBE_BIN"\n'
+        '  chmod +x "$SCREENSCRIBE_BIN"\n'
+        "else\n  exit 2\nfi\n",
+    )
+    release = tmp_path / "uv-release"
+    release.mkdir()
+    asset = release / f"uv-{target}.tar.gz"
+    with tarfile.open(asset, "w:gz") as archive:
+        archive.add(staged, arcname=staged.name)
+    digest = checksum or hashlib.sha256(asset.read_bytes()).hexdigest()
+    (release / f"{asset.name}.sha256").write_text(f"{digest}  {asset.name}\n")
+    return release
+
+
+def test_a_clean_host_fetches_uv_to_install_screenscribe(tmp_path: Path) -> None:
+    # A clean Mac (2026-10-22): no brew, uv or pipx, system python3 3.9.
+    # `pip install --user pipx` landed outside PATH and 3.9 cannot run
+    # ScreenScribe, so the public install exited 1 with a working runtime.
+    release = _uv_release(tmp_path)
+    screenscribe = tmp_path / "provider-bin/screenscribe"
+    screenscribe.parent.mkdir()
+
+    result = _run_installer(
+        tmp_path,
+        "screenscribe",
+        path=[tmp_path / "bin"],
+        REQUIRE_FOUNDATIONS="1",
+        SCREENSCRIBE_BIN=str(screenscribe),
+        UV_RELEASE_BASE=f"file://{release}",
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert list((tmp_path / "home").rglob("tools/uv/bin/uv")), output
+    assert "Installing screenscribe from PyPI via uv" in output
+    assert screenscribe.exists()
+
+
+def test_a_uv_download_that_misses_its_sha256_is_refused(tmp_path: Path) -> None:
+    release = _uv_release(tmp_path, checksum="0" * 64)
+
+    result = _run_installer(
+        tmp_path,
+        "screenscribe",
+        path=[tmp_path / "bin"],
+        REQUIRE_FOUNDATIONS="1",
+        UV_RELEASE_BASE=f"file://{release}",
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, output
+    assert "does not match its sha256" in output
+    assert not list((tmp_path / "home").rglob("tools/uv/bin/uv"))
+
+
 @pytest.mark.parametrize("required", ["0", "1"])
 def test_uv_channel_failure_keeps_foundation_admission_explicit(
     tmp_path: Path, required: str
@@ -470,7 +662,7 @@ def test_uv_channel_failure_keeps_foundation_admission_explicit(
 
 
 def test_the_default_run_refuses_a_missing_foundation(tmp_path: Path) -> None:
-    # Maciej's decision (2026-10-06): the public channels (npm, GitHub
+    # Vetcoders decision (2026-10-06): the public channels (npm, GitHub
     # releases, PyPI) exist precisely so a missing foundation can hard-fail —
     # an install that "succeeds" without the product spine is the stale-
     # vendored-copy failure mode the channels were built to kill. No

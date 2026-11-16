@@ -18,6 +18,7 @@ from . import doctor as doctor_module
 from .agent_stream import ANSI_PATTERN, AgentStreamParser, resolve_default_model
 from .control_plane import (
     RunNotResolved,
+    _report_denies_success,
     lookup_run,
     resolve_run,
     sync_state,
@@ -220,6 +221,10 @@ def _render_core_surface_help(topic: str) -> int:
         from .repository_claims import claims_cli_main
 
         return _invoke_owned_main(claims_cli_main, ["--help"])
+    if topic == "pr-closure":
+        from .pr_closure import main as pr_closure_main
+
+        return _invoke_owned_main(pr_closure_main, ["--help"])
     if topic == "settlements":
         parser = _build_parser()
         return _invoke_owned_main(
@@ -620,6 +625,20 @@ def _build_parser() -> argparse.ArgumentParser:
     add_repo_arguments(resume)
     resume.add_argument("--source-dir", default="")
     resume.add_argument("--model", default=None)
+    resume.add_argument(
+        "--permissions",
+        default="",
+        metavar="bypass|auto|accept-edits|read-only",
+        help="current explicit policy; omitted inherits the session's admitted one",
+    )
+    resume.add_argument(
+        "--sandbox",
+        nargs="?",
+        const="true",
+        default="",
+        metavar="true|false",
+        help="current explicit sandbox; omitted inherits the session's admitted one",
+    )
     resume.add_argument("--json", action="store_true")
     fork_source = sub.add_parser(
         "fork-source",
@@ -663,6 +682,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="persist and inspect run-addressed provider steering receipts",
     )
     message.add_argument("--run-id", default="")
+    message.add_argument(
+        "--connect-container",
+        action="store_true",
+        help="host recovery: reconnect an existing live container run; serve its inbox until interrupted or the owner exits",
+    )
     message.add_argument(
         "--session", default="", help="exact recorded runtime or provider session ID"
     )
@@ -867,12 +891,19 @@ def _head_lines(
 
 
 def _run_succeeded(run: dict[str, Any]) -> bool:
-    """True when the run reached a success state with a clean artifact gate."""
+    """True when the run reached a success state with a clean artifact gate.
+
+    A present report with ``finalized: false`` or an empty claim is not
+    success, even when the provider stream printed SUCCESS and the process
+    exited 0.
+    """
     state = str(run.get("state") or "")
     errors = [str(item) for item in (run.get("artifact_errors") or []) if str(item)]
-    return (
+    if not (
         state in SUCCESS_STATES and run.get("artifact_ok") is not False and not errors
-    )
+    ):
+        return False
+    return not _report_denies_success(run)
 
 
 def _run_terminal(run: dict[str, Any]) -> bool:
@@ -1244,6 +1275,8 @@ def _continue_launcher_named_session(
         skill=LAUNCH_ALIASES.get(command, command),
         launch_meta={"session_selection": selection},
         source_path=source_path,
+        permissions=str(getattr(args, "permissions", "") or ""),
+        sandbox=getattr(args, "sandbox", "") or None,
     )
     if args.await_completion:
         return _emit_launch_result(
@@ -1630,6 +1663,12 @@ def _observe_watch(
                 else:
                     _print_run_telemetry(_observed_telemetry(run))
                     print(f"watch:      run {run_id} is terminal ({state}); detached")
+                denial = _report_denies_success(run)
+                if denial:
+                    print(
+                        f"observe: incomplete; {denial}",
+                        file=sys.stderr,
+                    )
                 return 0 if _run_succeeded(run) else 1
             time.sleep(interval)
             fresh = lookup_run(run_id)
@@ -2292,6 +2331,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(render_workflow_help(raw_args[0]), end="")
             return 0
 
+    if raw_args and raw_args[0] == "agents":
+        from .help_surface import render_agents_help
+
+        print(render_agents_help(), end="")
+        return 0
+
     try:
         raw_args = _normalize_research_arity_args(raw_args)
     except ValueError as exc:
@@ -2383,6 +2428,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .dispatch.cli import main as dispatch_main
 
         return dispatch_main(raw_args[1:])
+    if raw_args and raw_args[0] == "pr-closure":
+        from .pr_closure import main as pr_closure_main
+
+        return _invoke_owned_main(pr_closure_main, raw_args[1:])
     if raw_args and raw_args[0] == "ship":
         from .ship import main as ship_main
 
@@ -2699,6 +2748,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(line)
         return 0
     if args.command == "message":
+        # In a container run the host remains the only owner. Never fall back
+        # to a guest-local outbox if the relay is unavailable or an unsupported
+        # action was requested.
+        from .container_message_bridge import guest_bridge_selected
         from .message_control import (
             MessageControlError,
             acknowledge_message,
@@ -2708,9 +2761,65 @@ def main(argv: Sequence[str] | None = None) -> int:
             send_message,
         )
 
+        guest_bridge = guest_bridge_selected(args.run_id or "")
+        if args.connect_container:
+            if (
+                guest_bridge
+                or not args.run_id
+                or any(
+                    (
+                        args.session,
+                        args.file,
+                        args.receive,
+                        args.ack,
+                        args.inspect,
+                        args.retry,
+                        args.mark_context_injected,
+                        args.nonce,
+                        args.idempotency_key,
+                    )
+                )
+            ):
+                print(
+                    "error: connect_container_requires_host_run_id_only",
+                    file=sys.stderr,
+                )
+                return 2
+            from .container_connection import connect_container
+
+            try:
+                connect_container(
+                    args.run_id,
+                    ready=lambda status: print(json.dumps(status), flush=True),
+                )
+            except KeyboardInterrupt:
+                return 0
+            except (
+                OSError,
+                ValueError,
+                RuntimeError,
+                subprocess.SubprocessError,
+            ) as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+            return 0
+        if guest_bridge and not (args.receive or args.ack or args.inspect):
+            print("error: bridge_action_unsupported", file=sys.stderr)
+            return 2
+
         if args.inspect:
             try:
-                result = inspect_message(args.inspect)
+                if guest_bridge:
+                    from .container_message_bridge import guest_request
+
+                    result = guest_request(
+                        action="inspect",
+                        run_id=args.run_id or "",
+                        session=args.session or "",
+                        message_id=args.inspect,
+                    )
+                else:
+                    result = inspect_message(args.inspect)
             except MessageControlError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 2
@@ -2739,13 +2848,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise MessageControlError(
                         "inbox_action_conflicts_with_send_or_inspect"
                     )
-                result = (
-                    receive_messages(run_id=args.run_id, session=args.session)
-                    if args.receive
-                    else acknowledge_message(
-                        args.ack, run_id=args.run_id, session=args.session
+                if guest_bridge:
+                    from .container_message_bridge import guest_request
+
+                    result = guest_request(
+                        action="receive" if args.receive else "ack",
+                        run_id=args.run_id or "",
+                        session=args.session or "",
+                        message_id=args.ack or "",
                     )
-                )
+                else:
+                    result = (
+                        receive_messages(run_id=args.run_id, session=args.session)
+                        if args.receive
+                        else acknowledge_message(
+                            args.ack, run_id=args.run_id, session=args.session
+                        )
+                    )
             except MessageControlError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 return 2
@@ -2865,6 +2984,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_path=str(Path(args.prompt_file).expanduser().resolve())
             if args.prompt_file
             else "",
+            permissions=args.permissions,
+            sandbox=args.sandbox or None,
         )
         if args.json:
             print(json.dumps(resume_result, ensure_ascii=False, indent=2))

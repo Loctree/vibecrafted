@@ -5,19 +5,21 @@ on:
     paths:
       - "vibecrafted-server/**"
       - ".github/workflows/vibecrafted-server.yml"
-    branches: [main, "feat/**", "fix/**", "docs/**"]
+    branches: [main]
+  # Any base branch, so stacked PRs (release/*, fix/*) still run it once.
   pull_request:
     paths:
       - "vibecrafted-server/**"
       - ".github/workflows/vibecrafted-server.yml"
-    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: vc-server-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # One live run per PR: a new push to the PR cancels the superseded run.
+  # Push/tag/dispatch/merge-queue runs get a unique group and are never cancelled.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   windows-transcript:

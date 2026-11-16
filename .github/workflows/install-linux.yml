@@ -13,11 +13,11 @@ name: Install (Linux Matrix)
 # likely failure mode for a real Debian user.
 
 on:
+  # Branch pushes with an open PR are already covered by pull_request; only
+  # main gets a push run so the default branch keeps its own signal.
   push:
     branches:
       - main
-      - develop
-      - "release/*"
   pull_request:
     branches:
       - main
@@ -32,6 +32,12 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  # One live run per PR: a new push to the PR cancels the superseded run.
+  # Push/tag/dispatch/merge-queue runs get a unique group and are never cancelled.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   linux-runtime-pack:
@@ -117,7 +123,7 @@ jobs:
     env:
       # `cargo install aicx` is memory-heavy; keep CI runners from OOM-killing rustc.
       CARGO_BUILD_JOBS: "1"
-      # Named waiver under the hard-fail foundations contract (Maciej,
+      # Named waiver under the hard-fail foundations contract (Vetcoders decision,
       # 2026-10-06): prebuilt Loctree channel binaries do not run on jammy's
       # glibc 2.35 ("missing or broken" right after a successful npm install).
       # Waive ONLY 22.04; 24.04 keeps the hard default and proves the
@@ -251,7 +257,7 @@ jobs:
     env:
       # debian:bookworm-slim runs with limited memory inside the job container.
       CARGO_BUILD_JOBS: "1"
-      # Named waiver under the hard-fail foundations contract (Maciej,
+      # Named waiver under the hard-fail foundations contract (Vetcoders decision,
       # 2026-10-06): bookworm's glibc 2.36 cannot run the prebuilt Loctree and
       # prview channel binaries. Channel gap (glibc baseline of the Rust
       # builds) tracked in ~/.vibecrafted/vibecrafted-fail.md.

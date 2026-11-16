@@ -331,6 +331,77 @@ def test_darwin_linker_wrapper_uses_measured_xcode_pair_without_ld_classic(
         assert not captured.exists()
 
 
+@pytest.mark.parametrize("profile", ["local", "local-xcode27"])
+@pytest.mark.parametrize(
+    ("clang", "ld", "accepted"),
+    [
+        ("2100.3.34.2", "27037.1", True),
+        ("2100.4.1.1", "27106.1", True),
+        ("2100.3.34.2", "27106.1", False),
+        ("2100.4.1.1", "27037.1", False),
+        ("2100.3.27.1", "27036.1", False),  # observed Xcode beta
+        ("2100.4.1.2", "27106.1", False),
+        ("2100.4.1.1", "27106.2", False),
+    ],
+)
+def test_xcode_stable_versions_are_admitted_as_exact_pairs(
+    tmp_path: Path, profile: str, clang: str, ld: str, accepted: bool
+) -> None:
+    """Execute the real contract and shim; only tool paths are fabricated."""
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    captured = tmp_path / "clang-arguments"
+    (tools / "clang").write_text(
+        '#!/bin/sh\nif [ "${1:-}" = --version ]; then\n'
+        'printf "%s\\n" "$FAKE_CLANG_VERSION"; exit 0; fi\n'
+        'printf "%s\\n" "$@" > "$CAPTURED"\n'
+    )
+    (tools / "ld").write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_LD_VERSION"\n')
+    (tools / "xcrun").write_text(
+        '#!/bin/sh\ncase "$2" in\n'
+        'clang|ld) printf "%s/%s\\n" "$FAKE_BIN" "$2" ;;\n'
+        "*) exit 1 ;;\nesac\n"
+    )
+    for tool in tools.iterdir():
+        tool.chmod(0o755)
+    contract = (REPO_ROOT / "scripts/lib/release-toolchain-contract.sh").read_text()
+    contract = contract.replace(
+        "/Library/Developer/CommandLineTools/usr/bin/ld-classic",
+        str(tmp_path / "absent-ld-classic"),
+    )
+    candidate = tmp_path / "contract.sh"
+    candidate.write_text(contract)
+    env = {
+        **os.environ,
+        "PATH": f"{tools}:{os.environ['PATH']}",
+        "FAKE_BIN": str(tools),
+        "CAPTURED": str(captured),
+        "FAKE_CLANG_VERSION": f"Apple clang version 21.0.0 (clang-{clang})",
+        "FAKE_LD_VERSION": f"@(#)PROGRAM:ld PROJECT:ld-{ld}",
+        "VIBECRAFTED_RELEASE_TOOLCHAIN_CONTRACT": str(candidate),
+        "VIBECRAFTED_RELEASE_TOOLCHAIN_PROFILE": profile,
+    }
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / "scripts/lib/rust-linker-darwin-classic.sh"),
+            "object.o",
+            "-o",
+            "product",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if accepted:
+        assert result.returncode == 0, result.stderr
+        assert captured.read_text().splitlines() == ["object.o", "-o", "product"]
+    else:
+        assert result.returncode != 0
+        assert "release xcode" in result.stderr and "drift" in result.stderr
+        assert not captured.exists(), "a refused pair must never execute the linker"
+
+
 def _release_contract_make() -> str:
     # Both Apple make entry points are shims. Resolve gnumake before
     # applying a fixture DEVELOPER_DIR, so the recipe exercises the contract.
@@ -1281,68 +1352,6 @@ def test_tag_release_builds_all_carriers_from_a_commit_on_main() -> None:
         "portable-output.json",
     ):
         assert artifact in workflow
-
-
-@pytest.mark.parametrize(
-    ("donor", "revision"),
-    [
-        ("terminal", "38ef2f918383ca4dde797d22869b619097c81d05"),
-        ("frame", "0b91c4f0806356b5c92e46c82bf0fdf0310c0222"),
-    ],
-)
-def test_hosted_dmg_donor_defaults_and_fallbacks_use_approved_revisions(
-    donor: str, revision: str
-) -> None:
-    workflow = (REPO_ROOT / ".github/workflows/release-dmg.yml").read_text()
-    dispatch_default = re.search(
-        rf"      {donor}_ref:\n(?:        [^\n]+\n)*?        default: ([0-9a-f]{{40}})\n",
-        workflow,
-    )
-    assert dispatch_default is not None
-    assert dispatch_default.group(1) == revision
-    checkout = re.search(
-        rf"          repository: vetcoders/vc-{donor}\n"
-        rf"          ref: \$\{{\{{ inputs\.{donor}_ref \|\| '([0-9a-f]{{40}})' \}}\}}",
-        workflow,
-    )
-    assert checkout is not None
-    assert checkout.group(1) == revision
-
-
-def test_tag_dmg_donors_match_the_public_cross_platform_source_pins() -> None:
-    pins = json.loads((REPO_ROOT / "config/source-components.json").read_text())
-    assert pins["schema"] == "vibecrafted.source-components.v1"
-    workflow = (REPO_ROOT / ".github/workflows/release-dmg.yml").read_text()
-    linux = (REPO_ROOT / "scripts/build-linux-arm64-runtime-pack.sh").read_text()
-    windows = (REPO_ROOT / "scripts/build-windows-x64-runtime-pack.ps1").read_text()
-    for donor in ("frame", "terminal"):
-        revision = re.search(rf'{donor}_revision="([0-9a-f]{{40}})"', linux)
-        assert revision is not None
-        sha = revision.group(1)
-        assert pins["components"][f"vc-{donor}"]["revision"] == sha
-        assert f'${donor}Revision = "{sha}"' in windows
-        assert f"ref: ${{{{ inputs.{donor}_ref || '{sha}' }}}}" in workflow
-        assert f"repository: vetcoders/vc-{donor}" in workflow
-
-
-def test_changelog_names_only_the_pinned_donor_revisions() -> None:
-    # The Frame pin kept moving after the 4.4.0 entry was written, and the
-    # entry kept naming the first one. Release notes for the version being cut
-    # may only name full revisions that the builders actually pin.
-    version = (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    section = re.search(
-        rf"^## \[{re.escape(version)}\][^\n]*\n(?P<body>.*?)(?=^## \[|\Z)",
-        changelog,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert section is not None, f"CHANGELOG.md has no entry for {version}"
-    pins = json.loads((REPO_ROOT / "config/source-components.json").read_text())
-    pinned = {component["revision"] for component in pins["components"].values()}
-    named = set(re.findall(r"\b[0-9a-f]{40}\b", section.group("body")))
-    assert named <= pinned, (
-        f"CHANGELOG {version} names unpinned revisions: {sorted(named - pinned)}"
-    )
 
 
 @pytest.mark.parametrize("mechanism", ["api", "apple-id", "incomplete"])

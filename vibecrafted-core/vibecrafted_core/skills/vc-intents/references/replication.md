@@ -15,9 +15,9 @@ baseline commit. Then per id:
 
 Field result (Codescribe, 2026-09-18/19, 974 intents, six lanes):
 
-| pair          | compared | agree | agreement  |
-| ------------- | -------- | ----- | ---------- |
-| div0 · dragon | 756      | 550   | **72.8 %** |
+| pair            | compared | agree | agreement  |
+| --------------- | -------- | ----- | ---------- |
+| host-a · host-b | 756      | 550   | **72.8 %** |
 
 Per lane, same agent and model on both hosts: junie/gemini-3.8-flash 100 % and
 88 %; grok/grok-4.6 67 %; cursor/cursor-grok-4.6-xhigh 61 %; kimi/kimi-code/k3
@@ -51,7 +51,7 @@ Two axes, neither of them "model rank":
   was highest on the previous run. Rotate providers across lanes so no single
   interactive session limit is touched.
 
-Exact model identifiers come from the Founder or from a live list
+Exact model identifiers come from the user or from a live list
 (`agy models`, `junie --model <x>` prints the pool on a bad name). Never guess a
 model id from memory.
 
