@@ -2265,11 +2265,178 @@ def _normalize_marbles_state(path: Path) -> RunStatus | None:
     )
 
 
+# Facts an event may carry that outlive it: the reducer copies each one
+# forward from the run's earlier state unless the event restates it.
+_EVENT_CARRIED_KEYS: tuple[str, ...] = (
+    "runtime",
+    "source_dir",
+    "prompt",
+    "file",
+    "retry_of",
+    "agent_session_id",
+    "runtime_session_id",
+    "parent_runtime_session_id",
+    "resume_of",
+    "resume_root",
+    "attempt",
+    "native_resume",
+    "native_fork",
+    "fork_source_session_id",
+    "session_selection",
+    "provider_session_id",
+    "provider_session_requested",
+    "native_identity_status",
+    "native_identity_evidence",
+    "resume_idempotency_key",
+    "dispatch_run_id",
+    "dispatch_cut_id",
+    "dispatch_branch",
+    "dispatch_baseline_sha",
+    "dispatch_attempt",
+    "dispatch_idempotency_key",
+    "resume_mode",
+    "automatic_attempt_budget",
+    "automatic_attempt_number",
+    "resume_settlement_revision",
+    "resume_trust_receipt_id",
+    "worker_command",
+    "owner_pid",
+    "owner_identity",
+    "worker_pid",
+    "worker_pgid",
+    "worker_identity",
+    "launcher_identity",
+    "heartbeat_at",
+    "meta",
+    "artifact_ok",
+    "artifact_errors",
+    "artifact_warnings",
+    "recovery_required",
+    "operator_stop_accepted",
+    "operator_stop_at",
+    "stop_reason",
+    "stop_signal",
+    "stop_target",
+    "stop_target_pid",
+    "stop_target_pgid",
+    "stop_signal_sent",
+    "stop_already_dead",
+    "stop_alive_after_grace",
+    "stop_grace_seconds",
+    "terminal_reason",
+    "exit_signal",
+    # Durable workspace identity must survive event-stream refreshes;
+    # otherwise a later generic `state` event erases the identity
+    # carried by lifecycle:created/active.
+    "workspace_id",
+    "vibecrafted_session_id",
+    "workspace_instance_id",
+    "build_id",
+    "workspace_display_label",
+    "worker_host_session",
+    "worker_host_display",
+    "model_requested",
+    "model_effective",
+    "model_source",
+    "repo_requested",
+    "repo_kind",
+    "repo_identity",
+    "repo_remote",
+    "base_requested",
+    "base_ref",
+    "baseline_sha",
+    "runtime_class",
+    "presentation",
+    "requires_pty",
+    "execution_host",
+    "parent_root",
+    "effective_worker_root",
+    "parent_run_id",
+    "source_path",
+    "source_snapshot",
+    "source_origin",
+    "source_digest",
+    "source_ref",
+)
+
+
+# Verdicts a projection derives while a run is still live. They are settled
+# facts only once the run is terminal; before that the next pass recomputes them.
+_SNAPSHOT_PROVISIONAL_KEYS = frozenset(
+    {"artifact_ok", "artifact_errors", "artifact_warnings", "recovery_required"}
+)
+
+
+def _status_from_snapshot(
+    snapshot: dict[str, Any] | None, segment_started: dt.datetime | None
+) -> RunStatus | None:
+    """Rebuild the reducer's view of a run whose history left the active stream.
+
+    Rotation empties the event stream on the promise that the snapshots it has
+    just projected are the durable state. An event that arrives afterwards has
+    no earlier event left to fold onto; the snapshot is that earlier state.
+    Without it the event alone defined the run, and a Guardian settlement
+    notice replaced the executor, root and report of a finished run.
+
+    Only a run that started before the active segment qualifies. A run that
+    started inside it still has every event in the stream; folding those onto
+    its own earlier projection would feed derived values back in as facts.
+    """
+    if not snapshot or segment_started is None:
+        return None
+    run_id = str(snapshot.get("run_id") or "").strip()
+    if not run_id:
+        return None
+    started = _parse_iso(str(snapshot.get("started_at") or ""))
+    if started is None or (started.tzinfo is None) != (segment_started.tzinfo is None):
+        return None
+    if started >= segment_started:
+        return None
+    settled = str(snapshot.get("liveness") or "") == "terminal"
+    return RunStatus(
+        run_id=run_id,
+        state=str(snapshot.get("state") or "unknown"),
+        agent=str(snapshot.get("agent") or "unknown"),
+        skill=str(snapshot.get("skill") or "unknown"),
+        mode=str(snapshot.get("mode") or "unknown"),
+        root=str(snapshot.get("root") or ""),
+        operator_session=str(snapshot.get("operator_session") or ""),
+        latest_report=str(snapshot.get("latest_report") or ""),
+        latest_transcript=str(snapshot.get("latest_transcript") or ""),
+        last_error=str(snapshot.get("last_error") or ""),
+        updated_at=str(snapshot.get("updated_at") or ""),
+        started_at=str(snapshot.get("started_at") or ""),
+        health=str(snapshot.get("health") or "unknown"),
+        source=str(snapshot.get("source") or "snapshot"),
+        lock_present=bool(snapshot.get("lock_present")),
+        exit_code=_coerce_int(snapshot.get("exit_code")),
+        liveness=str(snapshot.get("liveness") or ""),
+        launcher_pid=_coerce_int(snapshot.get("launcher_pid")),
+        completed_at=str(snapshot.get("completed_at") or ""),
+        session_id=str(snapshot.get("session_id") or ""),
+        current_loop=_coerce_int(snapshot.get("current_loop")),
+        total_loops=_coerce_int(snapshot.get("total_loops")),
+        extra={
+            key: snapshot[key]
+            for key in _EVENT_CARRIED_KEYS
+            if snapshot.get(key) not in (None, "")
+            and (settled or key not in _SNAPSHOT_PROVISIONAL_KEYS)
+        },
+    )
+
+
 def _merge_event_stream(
-    merged: dict[str, RunStatus], *, only_run_id: str | None = None
+    merged: dict[str, RunStatus],
+    *,
+    only_run_id: str | None = None,
+    snapshots: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, RunStatus]:
     """Fold the durable event stream's per-run state into ``merged``, optionally
-    scoped to one run id and its ``<run_id>-...`` child rounds."""
+    scoped to one run id and its ``<run_id>-...`` child rounds.
+
+    ``snapshots`` are the retained per-run snapshots. A run that started before
+    the active segment, and has no earlier source in ``merged``, starts from
+    its snapshot, not from nothing."""
     stream = event_stream_path()
     if not stream.exists():
         return merged
@@ -2277,6 +2444,7 @@ def _merge_event_stream(
     scope = str(only_run_id or "").strip()
     child_prefix = f"{scope}-" if scope else ""
 
+    segment_started: dt.datetime | None = None
     for line in _read_lines(stream):
         try:
             event = json.loads(line)
@@ -2286,6 +2454,8 @@ def _merge_event_stream(
             continue
         run_id = str(event.get("run_id") or "").strip()
         if not run_id:
+            if event.get("kind") == "stream.segment":
+                segment_started = _parse_iso(str(event.get("ts") or ""))
             continue
         # Scoped projection: process only the target run and its child rounds
         # (marbles/polarize L2/L3 live in "<parent>-…-L<n>" records). Skipping
@@ -2338,6 +2508,8 @@ def _merge_event_stream(
         message = str(event.get("message") or "")
         ts = _safe_iso(str(event.get("ts") or ""))
         existing = merged.get(run_id)
+        if existing is None and snapshots:
+            existing = _status_from_snapshot(snapshots.get(run_id), segment_started)
 
         state = str(payload.get("state") or "")
         if not state and kind.startswith("lifecycle:"):
@@ -2401,97 +2573,7 @@ def _merge_event_stream(
             session_id = ensure_session_id(session_id)
 
         extra = dict(existing.extra if existing is not None else {})
-        for key in (
-            "runtime",
-            "source_dir",
-            "prompt",
-            "file",
-            "retry_of",
-            "agent_session_id",
-            "runtime_session_id",
-            "parent_runtime_session_id",
-            "resume_of",
-            "resume_root",
-            "attempt",
-            "native_resume",
-            "native_fork",
-            "fork_source_session_id",
-            "session_selection",
-            "provider_session_id",
-            "provider_session_requested",
-            "native_identity_status",
-            "native_identity_evidence",
-            "resume_idempotency_key",
-            "dispatch_run_id",
-            "dispatch_cut_id",
-            "dispatch_branch",
-            "dispatch_baseline_sha",
-            "dispatch_attempt",
-            "dispatch_idempotency_key",
-            "resume_mode",
-            "automatic_attempt_budget",
-            "automatic_attempt_number",
-            "resume_settlement_revision",
-            "resume_trust_receipt_id",
-            "worker_command",
-            "owner_pid",
-            "owner_identity",
-            "worker_pid",
-            "worker_pgid",
-            "worker_identity",
-            "launcher_identity",
-            "heartbeat_at",
-            "meta",
-            "artifact_ok",
-            "artifact_errors",
-            "artifact_warnings",
-            "recovery_required",
-            "operator_stop_accepted",
-            "operator_stop_at",
-            "stop_reason",
-            "stop_signal",
-            "stop_target",
-            "stop_target_pid",
-            "stop_target_pgid",
-            "stop_signal_sent",
-            "stop_already_dead",
-            "stop_alive_after_grace",
-            "stop_grace_seconds",
-            "terminal_reason",
-            "exit_signal",
-            # Durable workspace identity must survive event-stream refreshes;
-            # otherwise a later generic `state` event erases the identity
-            # carried by lifecycle:created/active.
-            "workspace_id",
-            "vibecrafted_session_id",
-            "workspace_instance_id",
-            "build_id",
-            "workspace_display_label",
-            "worker_host_session",
-            "worker_host_display",
-            "model_requested",
-            "model_effective",
-            "model_source",
-            "repo_requested",
-            "repo_kind",
-            "repo_identity",
-            "repo_remote",
-            "base_requested",
-            "base_ref",
-            "baseline_sha",
-            "runtime_class",
-            "presentation",
-            "requires_pty",
-            "execution_host",
-            "parent_root",
-            "effective_worker_root",
-            "parent_run_id",
-            "source_path",
-            "source_snapshot",
-            "source_origin",
-            "source_digest",
-            "source_ref",
-        ):
+        for key in _EVENT_CARRIED_KEYS:
             if (
                 key in {"model_requested", "model_effective", "model_source"}
                 and payload.get("agent")
@@ -3945,7 +4027,11 @@ def sync_state(
                 continue
             merged[status.run_id] = _merge_status(merged.get(status.run_id), status)
 
-        merged = _merge_event_stream(merged, only_run_id=scope if scoped else None)
+        merged = _merge_event_stream(
+            merged,
+            only_run_id=scope if scoped else None,
+            snapshots=previous_snapshots,
+        )
 
         payload_runs = []
         run_snapshot_dir().mkdir(parents=True, exist_ok=True)

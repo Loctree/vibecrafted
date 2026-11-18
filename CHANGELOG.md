@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Headless `agy` workers are no longer cut off after 30 minutes. The launcher
+  passed a fixed `--print-timeout 30m`, which ended long turns before their
+  commit and report. A limit now applies only when
+  `VIBECRAFTED_AGY_PRINT_TIMEOUT` is set.
+- An `agy` turn that its print limit cut short is recorded as failed. `agy`
+  exits 0 and reports `SUCCESS` for such a turn; the run view showed a green
+  `SUCCESS` for work that had not finished.
+- `vibecrafted await` and other single-run reads on a finished run keep its
+  executor, worktree, report and model after the event stream has rotated. A
+  Guardian settlement notice used to replace them with a bare `guardian`
+  record, after which `vibecrafted resume` refused the run.
+
 ## [4.5.1] - 2026-10-26
 
 ### Fixed
