@@ -738,6 +738,8 @@ class AsyncRunHandle:
     # Where stream_session_id came from: the stream, or the provider's
     # on-disk session store adopted while the run was live.
     stream_session_source: str = "provider_stream"
+    # Why the provider ended the turn before finishing it (agy print limit).
+    stream_incomplete_reason: str = ""
     # Parent/fork session ids from meta that the provider id must never equal.
     parent_sessions: dict[str, str] = field(default_factory=dict)
     telemetry: RunTelemetry | None = None
@@ -1206,6 +1208,10 @@ class AsyncSupervisor:
             return handle
 
         handle.exit_code = handle.process.returncode
+        # A turn the provider's own limit cut short still exits 0. Nothing
+        # after the cut ran, including the commit and the report.
+        if handle.exit_code == 0 and handle.stream_incomplete_reason:
+            handle.exit_code = 1
         if handle.meta_path is not None:
             try:
                 fork_meta = json.loads(handle.meta_path.read_text())
@@ -1269,15 +1275,23 @@ class AsyncSupervisor:
                 },
             )
         else:
+            failure_payload: dict[str, object] = {
+                "exit_code": handle.exit_code,
+                "completed_at": handle.completed_at.isoformat(),
+                "liveness": "terminal",
+            }
+            failure_message = f"process failed with exit code {handle.exit_code}"
+            if handle.stream_incomplete_reason:
+                failure_message = (
+                    "provider cut the turn before it finished"
+                    f" ({handle.stream_incomplete_reason})"
+                )
+                failure_payload["last_error"] = failure_message
             await self._transition(
                 handle,
                 RunState.FAILED,
-                f"process failed with exit code {handle.exit_code}",
-                payload={
-                    "exit_code": handle.exit_code,
-                    "completed_at": handle.completed_at.isoformat(),
-                    "liveness": "terminal",
-                },
+                failure_message,
+                payload=failure_payload,
             )
 
         handle.artifact_validation = validate_artifacts(
@@ -1647,6 +1661,7 @@ class AsyncSupervisor:
         handle.usage_events = parser.usage_events
         handle.cost_usd = parser.cost_usd
         handle.cost_source = parser.cost_source
+        handle.stream_incomplete_reason = parser.incomplete_reason
         handle.resume_command = _with_adopted_session(
             handle, parser.resume_command(handle.root)
         )

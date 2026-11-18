@@ -55,6 +55,7 @@ from .execution_controls import (
 from .failure_attribution import attribute_failure
 from .local_skills import LocalSkillError, resolve_execution_skill
 from .model_overrides import _with_model_override
+from .prompt_transport import print_limit_flags
 from .report_contract import (
     CLAIM_DIGEST_ENV,
     materialize_launcher_report_template,
@@ -5498,8 +5499,7 @@ def _default_command(
             *flags,
             "--add-dir",
             ".",
-            "--print-timeout",
-            "30m",
+            *print_limit_flags("agy"),
             "--print",
             prompt,
         ]
@@ -5612,8 +5612,7 @@ def _stdin_command(agent: str, controls: ExecutionControls | None = None) -> lis
             *flags,
             "--add-dir",
             ".",
-            "--print-timeout",
-            "30m",
+            *print_limit_flags("agy"),
             "--print=",
             "--input-format",
             "stream-json",

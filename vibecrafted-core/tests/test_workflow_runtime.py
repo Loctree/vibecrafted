@@ -223,8 +223,6 @@ def _write_finished_lane_meta(
                 "native-123",
                 "--add-dir",
                 ".",
-                "--print-timeout",
-                "30m",
                 "--print=",
                 "--input-format",
                 "stream-json",
@@ -401,20 +399,20 @@ def test_research_runtime_yaml_wins_over_legacy_toml_and_applies_lane_models(
         "agy-yaml",
         "--add-dir",
         ".",
-        "--print-timeout",
-        "30m",
         "--print=",
         "--input-format",
+        "stream-json",
+        "--output-format",
     ]
     assert synthesis_transcript.splitlines()[:8] == [
         "--model",
         "agy-synth",
         "--add-dir",
         ".",
-        "--print-timeout",
-        "30m",
         "--print=",
         "--input-format",
+        "stream-json",
+        "--output-format",
     ]
     children = {child["agent"]: child for child in meta["children"]}
     assert children["codex"]["model_requested"] == "gpt-yaml"
@@ -472,10 +470,10 @@ def test_research_runtime_applies_model_request_per_child_runner(
         "frontier",
         "--add-dir",
         ".",
-        "--print-timeout",
-        "30m",
         "--print=",
         "--input-format",
+        "stream-json",
+        "--output-format",
     ]
 
     meta = json.loads((home / "parent.meta.json").read_text(encoding="utf-8"))

@@ -354,8 +354,6 @@ def _agy_argv(*prefix: str) -> list[str]:
         *prefix,
         "--add-dir",
         ".",
-        "--print-timeout",
-        "30m",
         "--print=",
         "--input-format",
         "stream-json",

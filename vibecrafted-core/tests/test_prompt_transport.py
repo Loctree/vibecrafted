@@ -8,10 +8,13 @@ import stat
 import sys
 from pathlib import Path
 
+import pytest
 from vibecrafted_core.prompt_transport import (
+    AGY_PRINT_TIMEOUT_ENV,
     encode_stream_json_user_turn,
     main,
     materialize_stdin_file,
+    print_limit_flags,
     stdin_transport,
     stream_json_sibling,
 )
@@ -211,3 +214,97 @@ def test_async_supervisor_launches_kimi_with_prompt_on_argv(
     assert handle.agent_session_id == "kimi-sess-7"
     assert handle.resume_command == f"cd {tmp_path} && kimi -S kimi-sess-7"
     assert '"role": "assistant"' in transcript.read_text(encoding="utf-8")
+
+
+def test_no_provider_is_bounded_unless_the_operator_asks() -> None:
+    """A launcher-imposed limit cuts an agy turn before its commit and report."""
+    assert print_limit_flags("agy", {}) == []
+    assert print_limit_flags("agy", {AGY_PRINT_TIMEOUT_ENV: "0"}) == []
+    assert print_limit_flags("agy", {AGY_PRINT_TIMEOUT_ENV: "  "}) == []
+    for agent in ("claude", "codex", "grok", "cursor", "kimi"):
+        assert print_limit_flags(agent, {AGY_PRINT_TIMEOUT_ENV: "45m"}) == []
+
+
+def test_operator_limit_reaches_agy_as_a_duration() -> None:
+    assert print_limit_flags("agy", {AGY_PRINT_TIMEOUT_ENV: "45m"}) == [
+        "--print-timeout",
+        "45m",
+    ]
+    assert print_limit_flags("agy", {AGY_PRINT_TIMEOUT_ENV: " 1h30m "}) == [
+        "--print-timeout",
+        "1h30m",
+    ]
+
+
+@pytest.mark.parametrize("value", ["45", "soon", "30 m", "45m; rm -rf /", "-5m"])
+def test_malformed_operator_limit_is_refused(value: str) -> None:
+    with pytest.raises(ValueError, match=AGY_PRINT_TIMEOUT_ENV):
+        print_limit_flags("agy", {AGY_PRINT_TIMEOUT_ENV: value})
+
+
+def test_shell_launcher_reads_the_limit_from_the_same_owner(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.delenv(AGY_PRINT_TIMEOUT_ENV, raising=False)
+    assert main(["--print-limit-flags", "agy"]) == 0
+    assert capsys.readouterr().out == "\n"
+
+    monkeypatch.setenv(AGY_PRINT_TIMEOUT_ENV, "2h")
+    assert main(["--print-limit-flags", "agy"]) == 0
+    assert capsys.readouterr().out == "--print-timeout 2h\n"
+
+    monkeypatch.setenv(AGY_PRINT_TIMEOUT_ENV, "later")
+    assert main(["--print-limit-flags", "agy"]) == 2
+    assert AGY_PRINT_TIMEOUT_ENV in capsys.readouterr().err
+
+
+def test_agy_spawn_script_carries_no_limit_of_its_own() -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "vibecrafted_core"
+        / "runtime"
+        / "scripts"
+        / "agy_spawn.sh"
+    ).read_text(encoding="utf-8")
+    assert "--print-limit-flags agy" in script
+    assert "--print-timeout" not in script
+
+
+def test_async_supervisor_fails_a_turn_the_print_limit_cut(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """agy exits 0 and says SUCCESS when its print limit cuts the turn. The run
+    did not complete: no commit, no report."""
+    monkeypatch.setenv("VIBECRAFTED_HOME", str(tmp_path / "home"))
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text(PROMPT, encoding="utf-8")
+    report = tmp_path / "report.md"
+    transcript = tmp_path / "transcript.log"
+    fake_agy = tmp_path / "fake_agy.py"
+    fake_agy.write_text(
+        "import json, sys\n"
+        "sys.stdin.buffer.read()\n"
+        'print(json.dumps({"event": "init", "conversation_id": "conv-cut",'
+        ' "init": {"model": "gemini-4-carbon-high"}}))\n'
+        'print(json.dumps({"event": "result", "result": {"conversation_id":'
+        ' "conv-cut", "status": "SUCCESS", "response": "",'
+        ' "finished_reason": "print_timeout", "usage": {"input_tokens": 9,'
+        ' "output_tokens": 2}}}))\n',
+        encoding="utf-8",
+    )
+
+    handle = asyncio.run(
+        AsyncSupervisor().run(
+            run_id="agy-cut",
+            command=[sys.executable, str(fake_agy)],
+            root=tmp_path,
+            env={"VIBECRAFTED_AGENT": "agy"},
+            report_path=report,
+            transcript_path=transcript,
+            prompt_file_path=prompt,
+        )
+    )
+
+    assert handle.stream_incomplete_reason == "print_timeout"
+    assert handle.exit_code == 1
+    assert handle.agent_session_id == "conv-cut"
