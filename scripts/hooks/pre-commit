@@ -44,7 +44,8 @@ fi
 
 if [ ${#MD_YAML_FILES[@]} -gt 0 ]; then
     echo "▸ prettier (${#MD_YAML_FILES[@]} files)"
-    npx --yes prettier --write "${MD_YAML_FILES[@]}"
+    # Same pin as pre-push, so the formatter and the gate agree.
+    npx --yes "$(bash scripts/lib/prettier-spec.sh)" --write "${MD_YAML_FILES[@]}"
     git add "${MD_YAML_FILES[@]}"
 fi
 
