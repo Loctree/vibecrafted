@@ -14,6 +14,9 @@ from pathlib import Path
 
 SCHEMA = "io.vetcoders.vibecrafted.windows-release-output.v1"
 _SHA = re.compile(r"[0-9a-f]{40}\Z")
+# The product repository moved from vetcoders to Loctree; a receipt binds the
+# repository the workflow actually ran in, and either home is the product.
+PRODUCT_REPOSITORIES = frozenset({"Loctree/vibecrafted", "vetcoders/vibecrafted"})
 _PACK = re.compile(
     r"Vibecrafted_RuntimePack_(\d+\.\d+\.\d+)-(\d{8})-([0-9a-f]{8})-win32-x64\.tar\.gz\Z"
 )
@@ -90,7 +93,7 @@ def build_manifest(
     for value in (source_sha, terminal_sha, frame_sha, controller_sha):
         if not _SHA.fullmatch(value):
             raise ValueError("release revisions must be full lowercase Git SHAs")
-    if repository != "vetcoders/vibecrafted" or run_id < 1 or run_attempt < 1:
+    if repository not in PRODUCT_REPOSITORIES or run_id < 1 or run_attempt < 1:
         raise ValueError("invalid workflow identity")
     if not re.fullmatch(r"[0-9a-f]{24}", request_id):
         raise ValueError("release request_id must be 24 lowercase hex characters")

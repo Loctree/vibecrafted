@@ -112,7 +112,7 @@ def receipt(carriers, **overrides):
         "terminal_sha": TERMINAL,
         "frame_sha": FRAME,
         "controller_sha": CONTROLLER,
-        "repository": "vetcoders/vibecrafted",
+        "repository": "Loctree/vibecrafted",
         "run_id": 1234,
         "run_attempt": 1,
         "request_id": "a" * 24,
@@ -233,3 +233,15 @@ def test_workflow_receipt_waits_for_all_native_install_jobs():
             jobs[job]["steps"][0]["with"]["ref"]
             == "${{ needs.windows-installers.outputs.source_sha }}"
         )
+
+
+@pytest.mark.parametrize("repository", ["vetcoders/vibecrafted", "Loctree/vibecrafted"])
+def test_receipt_accepts_both_product_homes(carriers, repository):
+    assert (
+        receipt(carriers, repository=repository)["workflow"]["repository"] == repository
+    )
+
+
+def test_receipt_refuses_a_foreign_repository(carriers):
+    with pytest.raises(ValueError, match="invalid workflow identity"):
+        receipt(carriers, repository="someone/vibecrafted")
