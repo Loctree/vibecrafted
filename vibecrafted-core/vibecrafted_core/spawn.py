@@ -2780,13 +2780,15 @@ class _ClaudeTranscriptUsage:
     @staticmethod
     def _inherited_digest(event: dict[str, Any], *, include_usage: bool = False) -> str:
         # Claude rewrites sessionId/slug/parentUuid and may recompute historical
-        # usage. UUID + immutable message content/version/cwd prove inheritance.
+        # usage. A fork also stamps the copied history with the fork's own cwd,
+        # so a parent that worked in another repository arrives with a different
+        # cwd. UUID + immutable message content/type/version prove inheritance.
         message = {
             key: value
             for key, value in event["message"].items()
             if include_usage or key != "usage"
         }
-        payload = {key: event.get(key) for key in ("uuid", "type", "version", "cwd")}
+        payload = {key: event.get(key) for key in ("uuid", "type", "version")}
         payload["message"] = message
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
