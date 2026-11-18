@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [4.5.4] - 2026-11-18
+
+### Fixed
+
+- `vc-fork` continues a parent session that worked in another repository.
+  Claude stamps the copied history with the fork's own working directory, and
+  the fork was refused with "provider continuation inherited event content
+  changed".
+- The bundled Frame reports the product's version. 4.5.3 shipped the session
+  rail in a Frame that still called itself 4.5.1; `make release-version-gate`
+  now refuses a Frame pin whose version differs from `VERSION`.
+
 ## [4.5.3] - 2026-11-18
 
 ### Added

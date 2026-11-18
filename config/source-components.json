@@ -2,9 +2,9 @@
   "schema": "vibecrafted.source-components.v1",
   "components": {
     "vc-frame": {
-      "repository": "https://github.com/vetcoders/vc-frame.git",
-      "version": "4.5.1",
-      "revision": "9a59ae57cda5fd021435a49edc4a10993e092686"
+      "repository": "https://github.com/Loctree/vc-frame.git",
+      "version": "4.5.4",
+      "revision": "3097b83ec393b720f6dd9bd5733dc1050d58fed4"
     },
     "vc-terminal": {
       "repository": "https://github.com/vetcoders/vc-terminal.git",

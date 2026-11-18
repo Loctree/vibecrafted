@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "control-core"
-version = "4.5.3"
+version = "4.5.4"
 dependencies = [
  "ccusage-adapter-antigravity",
  "ccusage-adapter-claude",
