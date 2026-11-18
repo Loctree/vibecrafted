@@ -111,6 +111,15 @@ fi
 . "$REPO_ROOT/scripts/lib/release-single-flight.sh"
 
 ROOT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+# The source owner comes from the running repository, exactly as in
+# build-portable-release.sh: the repository moved organisations, and the
+# provenance carrier refuses an explicit owner that the Git remote contradicts.
+_origin_slug="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null \
+  | sed -E 's#^(git@[^:]+:|https?://([^/@]+@)?[^/]+/|ssh://[^/]+/)##; s#\.git$##' || true)"
+if [[ ! "$_origin_slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+  _origin_slug="vetcoders/vibecrafted"
+fi
+SOURCE_OWNER_REPO="${VIBECRAFTED_RELEASE_REPO:-${GITHUB_REPOSITORY:-$_origin_slug}}"
 
 # Exclusive ownership of the shared selection, snapshot and App/output paths
 # BEFORE any of those mutate. --help/-h and unknown argv have already exited
@@ -967,7 +976,7 @@ materialize_runtime_payload() {
     "$runtime/scripts/vc-terminal-product-entry.sh"
   "$SOURCE_ROOT/scripts/project-python" "$SOURCE_ROOT/scripts/distribution_manifest.py" \
     carrier --source "$SOURCE_ROOT" --output "$runtime/source-provenance.json" \
-    --owner-repo vetcoders/vibecrafted --source-revision "$ROOT_SHA"
+    --owner-repo "$SOURCE_OWNER_REPO" --source-revision "$ROOT_SHA"
   /bin/cp -R "$SOURCE_ROOT/bin/." "$runtime/bin/"
   /bin/cp -R "$SOURCE_ROOT/vibecrafted-core/vibecrafted_core" \
     "$runtime/vibecrafted-core/"

@@ -23,6 +23,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `vc-resume <agent> --run-id <id> '<prompt>'` continues that run in its own
   checkout, model and provider session. It used to start a fresh workflow in
   the caller's checkout and treat the first prompt word as a session name.
+- `make install`, `make release` and `make portable` build from a checkout
+  whose `origin` is the repository's new home, `Loctree/vibecrafted`. The
+  builders named the old owner while Git named the new one, and source
+  provenance refused the pair. Packs record the owner of the repository they
+  were built from; the installer accepts both homes.
 - Headless `agy` workers are no longer cut off after 30 minutes. The launcher
   passed a fixed `--print-timeout 30m`, which ended long turns before their
   commit and report. A limit now applies only when
