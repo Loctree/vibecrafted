@@ -5,8 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [4.5.3] - 2026-11-18
+
+### Added
+
+- The session rail shows every terminal that is printing, in all sessions.
+  Frame observes sustained pane output itself, so builds, test runs and agents
+  that never animate their terminal title are visible next to the ones that do.
+  A single redraw or a once-a-second repaint does not count.
+- `vc-git worktrees cleanup` removes worktrees whose work is committed and
+  drops registrations of deleted directories; `vc-git branches cleanup`
+  deletes branch names fully contained in the target. Both list first, then
+  ask, and need `--yes` without a terminal.
+
 ### Fixed
 
+- `vc-resume <agent> --run-id <id> '<prompt>'` continues that run in its own
+  checkout, model and provider session. It used to start a fresh workflow in
+  the caller's checkout and treat the first prompt word as a session name.
 - Headless `agy` workers are no longer cut off after 30 minutes. The launcher
   passed a fixed `--print-timeout 30m`, which ended long turns before their
   commit and report. A limit now applies only when
