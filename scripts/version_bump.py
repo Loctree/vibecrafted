@@ -43,6 +43,7 @@ CARGO_LOCK_PACKAGES = {
     Path("vibecrafted-app/Cargo.lock"): ("control-core",),
 }
 PLUGIN_MANIFEST_RELATIVE = Path("plugin.json")
+SOURCE_COMPONENTS_RELATIVE = Path("config/source-components.json")
 RELEASE_TEXT_PROJECTIONS = {
     Path("vibecrafted-app/shell-agent/app/project.yml"): (
         re.compile(
@@ -77,6 +78,20 @@ def check_version_declarations(version_file: Path) -> str:
     """Fail when a packaged product projection drifts from root VERSION."""
     current = version_file.read_text(encoding="utf-8").strip()
     _parse_version(current)
+    frame_pin = version_file.parent / SOURCE_COMPONENTS_RELATIVE
+    if frame_pin.exists():
+        # The Frame shipped inside the product reports the product's version.
+        # A bump does not rewrite this pin: it names a Frame commit, so Frame
+        # is aligned in its own repository and then pinned here.
+        components = json.loads(frame_pin.read_text(encoding="utf-8")).get(
+            "components", {}
+        )
+        frame = str(components.get("vc-frame", {}).get("version", ""))
+        if frame != current:
+            raise ValueError(
+                f"Version drift detected; expected {current} in every declaration: "
+                f"{frame_pin}#vc-frame={frame}"
+            )
     projections = _version_projections(version_file)
     if projections is None:
         return current
