@@ -409,6 +409,9 @@ class AgentStreamParser:
         # Final assistant answer of a stream that reports one (agy
         # `result.response`; kimi content; omp authoritative message_end).
         self.final_response: str = ""
+        # Why the provider ended the turn before finishing it; empty when the
+        # turn ran to completion or the stream never said.
+        self.incomplete_reason: str = ""
         self._omp_text_buffer = ""
         self._omp_text_streamed = False
         self._tool_burst: list[_ToolNote] = []
@@ -1167,6 +1170,15 @@ class AgentStreamParser:
             error = _stringish(result.get("error"))
             if error and error != "None":
                 out += f"\x1b[31m[{stamp()} error] {error}\x1b[0m\n"
+            # agy reports status SUCCESS and exits 0 when its print limit cuts
+            # the turn; finished_reason is the only field that says so.
+            if str(result.get("finished_reason") or "") == "print_timeout":
+                self.incomplete_reason = "print_timeout"
+                out += (
+                    f"\x1b[31m[{stamp()} error] the print limit cut this turn before"
+                    " it finished; the response is partial\x1b[0m\n"
+                )
+                status = "INCOMPLETE (print_timeout)"
             color = "32" if status.upper() == "SUCCESS" else "31"
             return self._emit(out + f"\x1b[{color}m[{stamp()}] {status}\x1b[0m\n")
         if kind == "error":
@@ -1317,6 +1329,9 @@ def filter_stream(
     the agent reports one (agy ``result.response``; kimi's last assistant
     ``content``; omp ``message_end`` text); it is left absent otherwise so
     callers can fall back to the transcript.
+
+    Returns 1 when the provider cut the turn short (``incomplete_reason``),
+    0 otherwise.
     """
     import sys as _sys
 
@@ -1353,7 +1368,9 @@ def filter_stream(
         last_path = Path(last_message_file).expanduser()
         last_path.parent.mkdir(parents=True, exist_ok=True)
         last_path.write_text(parser.final_response, encoding="utf-8")
-    return 0
+    # A turn the provider cut short is not a completed turn. A shell launcher
+    # running this filter under pipefail takes its failure path on it.
+    return 1 if parser.incomplete_reason else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

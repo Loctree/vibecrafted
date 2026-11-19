@@ -480,7 +480,9 @@ _vetcoders_resume_agent() {
     printf 'Noninteractive resume preserves its checkout; execution/worktree overrides require fork.\n' >&2
     return 2
   fi
-  if [[ -n "${_vetcoders_contract_run_id:-}" || -n "${_vetcoders_contract_last:-}" ]] && [[ -n "${_vetcoders_contract_prompt_explicit:-}${_vetcoders_contract_file_explicit:-}" ]]; then
+  # A run id with any input continues THAT run. The input may be --prompt,
+  # --file or a positional prompt: the spelling never changes the identity.
+  if [[ -n "${_vetcoders_contract_run_id:-}" || -n "${_vetcoders_contract_last:-}" ]] && [[ -n "${_vetcoders_contract_prompt_explicit:-}${_vetcoders_contract_file_explicit:-}${_vetcoders_contract_prompt:-}${_vetcoders_contract_file:-}" ]]; then
     if [[ -n "${_vetcoders_contract_session:-}" ]]; then
       echo "--session and --run-id/--last cannot be combined. Use one identity." >&2
       return 1
@@ -520,7 +522,8 @@ _vetcoders_resume_agent() {
   # Without --session the shared parser routes positionals into tail/prompt.
   # Promote the first tail token only when it looks like a session id (not a
   # free-form prompt word).
-  if [[ -z "$_vetcoders_contract_session" && -n "$_vetcoders_contract_tail" ]]; then
+  # A declared --run-id is already the identity: its tail is prompt text only.
+  if [[ -z "$_vetcoders_contract_session" && -z "${_vetcoders_contract_run_id:-}" && -n "$_vetcoders_contract_tail" ]]; then
     # The shared parser joins tail tokens with spaces. Parameter expansion
     # preserves that contract in both bash and zsh (read -a is bash-only).
     local _maybe_session="${_vetcoders_contract_tail%% *}"
@@ -577,6 +580,12 @@ _vetcoders_resume_agent() {
     return 2
   fi
   if [[ -n "$resume_explicit_input" ]]; then
+    # Fail closed: a resume that named a run must never start a fresh worker
+    # in the caller's checkout on the provider's default model.
+    if [[ -n "${_vetcoders_contract_run_id:-}" ]]; then
+      printf 'Refusing to start a fresh run for resume --run-id %s.\n' "$_vetcoders_contract_run_id" >&2
+      return 2
+    fi
     local -a fresh_args=(workflow "$tool" --runtime headless)
     [[ -z "${_vetcoders_contract_root:-}" ]] || fresh_args+=(--repo "$_vetcoders_contract_root")
     [[ -z "${_vetcoders_contract_model:-}" ]] || fresh_args+=(--model "$_vetcoders_contract_model")

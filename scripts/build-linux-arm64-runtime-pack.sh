@@ -37,7 +37,16 @@ source_revision="${VIBECRAFTED_SOURCE_REVISION:-}"
 # assembler already passes --owner-repo/--source-revision; export both so
 # the inherited environment is an atomic pair, not a half-set GITHUB_SHA.
 export VIBECRAFTED_SOURCE_REVISION="$source_revision"
-export VIBECRAFTED_SOURCE_OWNER_REPO="${VIBECRAFTED_SOURCE_OWNER_REPO:-vetcoders/vibecrafted}"
+# The owner is the repository this checkout came from, as the macOS and
+# portable builders take it; provenance refuses an owner its git provider
+# contradicts, and the repository has moved since its first release.
+if [[ -z "${VIBECRAFTED_SOURCE_OWNER_REPO:-}" ]]; then
+  VIBECRAFTED_SOURCE_OWNER_REPO="$(git -C "$repo_root" remote get-url origin 2>/dev/null \
+    | sed -E 's#^(git@[^:]+:|https?://([^/@]+@)?[^/]+/|ssh://[^/]+/)##; s#\.git$##' || true)"
+  [[ "$VIBECRAFTED_SOURCE_OWNER_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] \
+    || VIBECRAFTED_SOURCE_OWNER_REPO="vetcoders/vibecrafted"
+fi
+export VIBECRAFTED_SOURCE_OWNER_REPO
 # vc-terminal needs edition2024. Ambient cargo 1.83 fails an hour later.
 # Honor an explicit caller RUSTUP_TOOLCHAIN.
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-1.97.0}"
@@ -150,7 +159,7 @@ cp -R "$repo_root/config/." "$payload/config/"
 
 python3 "$repo_root/scripts/distribution_manifest.py" carrier \
   --source "$repo_root" --output "$payload/source-provenance.json" \
-  --owner-repo vetcoders/vibecrafted --source-revision "$source_revision"
+  --owner-repo "$VIBECRAFTED_SOURCE_OWNER_REPO" --source-revision "$source_revision"
 # Loctree, AICX, PRView and ScreenScribe ship through their own channels
 # (npm / GitHub releases / PyPI); the pack records only its own executables.
 PYTHONPATH="$payload/vibecrafted-core" python3 \
@@ -200,7 +209,7 @@ root = Path(os.environ["PAYLOAD"])
 source_manifest_sha = hashlib.sha256((root / "source-provenance.json").read_bytes()).hexdigest()
 donors = json.loads(Path(os.environ["DONOR_SELECTION"]).read_text())["components"]
 sources = {
-    "vibecrafted": ("https://github.com/vetcoders/vibecrafted", os.environ["SOURCE_REVISION"], source_manifest_sha, "MIT"),
+    "vibecrafted": ("https://github.com/" + os.environ["VIBECRAFTED_SOURCE_OWNER_REPO"], os.environ["SOURCE_REVISION"], source_manifest_sha, "MIT"),
     **{name: (pin["repository"], pin["revision"], pin["source_archive_sha256"], license_name)
        for name, license_name in (("vc-terminal", "Apache-2.0"), ("vc-frame", "MIT"))
        for pin in (donors[name],)},

@@ -289,3 +289,29 @@ def test_ruff_format_check_on_repo_root_passes() -> None:
         timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "path", ["scripts/hooks/pre-commit", "scripts/hooks/pre-push", "Makefile"]
+)
+def test_repo_prettier_entry_points_read_the_pin(path: str) -> None:
+    """A bare `npx prettier` resolves the newest release and can drift unseen."""
+    code = [
+        line
+        for line in (REPO_ROOT / path).read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    assert not [
+        line for line in code if re.search(r"npx\s+(--yes\s+)?prettier\b", line)
+    ]
+    assert any("scripts/lib/prettier-spec.sh" in line for line in code)
+
+
+def test_prettier_spec_prints_one_exact_version() -> None:
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "lib" / "prettier-spec.sh")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert re.fullmatch(r"prettier@\d+\.\d+\.\d+\n", result.stdout)

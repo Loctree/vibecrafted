@@ -1987,3 +1987,70 @@ def test_aicx_resume_fallback_uses_canonical_origin_filter(
     text = pack.read_text(encoding="utf-8")
     assert "aicx_project_filter: `Other-Org/codescribe`" in text
     assert "prefer native resume" not in text.lower()
+
+
+def _probe_resume_run_id_routing(tmp_path: Path, command: str) -> tuple[int, str, str]:
+    """Run one vc-resume spelling with the tracked core CLI replaced by a spy."""
+    home = tmp_path / "home"
+    home.mkdir()
+    capture = tmp_path / "core-argv.txt"
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["VIBECRAFTED_HOME"] = str(home / ".vibecrafted")
+    env["VIBECRAFTED_ROOT"] = str(REPO_ROOT)
+    env["CORE_PROBE"] = str(capture)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            "\n".join(
+                [
+                    f'source "{SHELL_SH}"',
+                    '_vetcoders_run_core_cli() { printf "%s\\n" "$*" >> "$CORE_PROBE"; }',
+                    command,
+                ]
+            ),
+        ],
+        check=False,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    argv = capture.read_text(encoding="utf-8") if capture.exists() else ""
+    return result.returncode, argv, result.stderr
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Kontynuuj prace nad zadaniem - no co ty.",
+        # A first word of 16+ id-shaped characters used to be promoted to a
+        # provider session, which turned the run resume into a native one.
+        "Kontynuuj-prace-nad-zadaniem teraz",
+    ],
+)
+def test_resume_run_id_with_positional_prompt_continues_that_run(
+    tmp_path: Path, prompt: str
+) -> None:
+    run_id = "work-261113-120010-20165"
+    rc, argv, stderr = _probe_resume_run_id_routing(
+        tmp_path, f"vc-resume codex --run-id {run_id} '{prompt}'"
+    )
+
+    assert rc == 0, stderr
+    assert argv.splitlines() == [f"codex resume --run-id {run_id} --prompt-stdin"]
+
+
+def test_resume_run_id_never_becomes_a_fresh_workflow(tmp_path: Path) -> None:
+    rc, argv, _stderr = _probe_resume_run_id_routing(
+        tmp_path,
+        "vc-resume codex --run-id work-261113-120010-20165 'Kontynuuj prace.'",
+    )
+
+    assert rc == 0
+    assert "workflow" not in argv
+    assert "resume-session" not in argv

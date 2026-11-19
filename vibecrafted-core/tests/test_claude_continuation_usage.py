@@ -83,14 +83,20 @@ def test_resume_refuses_missing_or_partial_source(tmp_path):
 
 
 @pytest.mark.parametrize("rewrite_sid", [False, True])
+@pytest.mark.parametrize("rewrite_cwd", [False, True])
 def test_fork_excludes_verified_parent_history_before_validating_child_version(
-    tmp_path, rewrite_sid
+    tmp_path, rewrite_sid, rewrite_cwd
 ):
     config = tmp_path / "config"
-    old = event(tmp_path, PARENT, uid="old", version="2.1.296", tokens=100000)
+    parent_root = tmp_path / "parent-repo"
+    old = event(parent_root, PARENT, uid="old", version="2.1.296", tokens=100000)
     source(config, PARENT, [old])
     usage = reader(tmp_path, config, fork_parent_session_id=PARENT)
     inherited = dict(old, sessionId=CHILD if rewrite_sid else PARENT, slug="child-slug")
+    if rewrite_cwd:
+        # A parent that worked in another repository: Claude stamps the copied
+        # history with the fork's working directory.
+        inherited["cwd"] = str(tmp_path)
     # Claude may recompute historical usage; immutable UUID/message contents establish inheritance.
     inherited["message"] = dict(old["message"], usage={"input_tokens": 999999})
     source(config, CHILD, [inherited, event(tmp_path)])

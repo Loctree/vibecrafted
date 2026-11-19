@@ -392,7 +392,7 @@ def test_installed_console_entrypoint_accepts_worktrees(example, action) -> None
     "arguments",
     [
         ["worktrees", "clean", "--apply"],
-        ["worktrees", "prune", "--dry-run"],
+        ["worktrees", "prune", "--apply"],
         ["worktrees", "merge", "worker"],
         ["worktrees", "list", "--apply"],
         ["worktrees", "triage", "--remove-integrated"],

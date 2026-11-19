@@ -433,6 +433,41 @@ def test_filter_stream_writes_agy_last_message(tmp_path) -> None:
     assert not missing.exists()
 
 
+def test_agy_turn_cut_by_the_print_limit_is_not_a_success(tmp_path) -> None:
+    """agy labels a turn its print limit cut as SUCCESS; finished_reason alone
+    says the turn never finished."""
+    import io
+
+    from vibecrafted_core.agent_stream import filter_stream
+
+    cut = (
+        b'{"event":"result","result":{"conversation_id":"conv-cut","status":"SUCCESS",'
+        b'"response":"","duration_seconds":1792.8,"num_turns":1,"usage":{"input_tokens":'
+        b'1012828,"output_tokens":110112},"finished_reason":"print_timeout"}}\n'
+    )
+    parser = AgentStreamParser("agy")
+    rendered = parser.feed_line(cut)
+    assert parser.incomplete_reason == "print_timeout"
+    assert "INCOMPLETE (print_timeout)" in rendered
+    assert "SUCCESS" not in rendered
+    assert "\x1b[32m" not in rendered
+
+    completed = AgentStreamParser("agy")
+    completed.feed_line(
+        b'{"event":"result","result":{"status":"SUCCESS","response":"ok",'
+        b'"finished_reason":"stop"}}\n'
+    )
+    assert completed.incomplete_reason == ""
+
+    out = io.BytesIO()
+    last = tmp_path / "last-message.md"
+    assert (
+        filter_stream("agy", stdin=io.BytesIO(cut), stdout=out, last_message_file=last)
+        == 1
+    )
+    assert not last.exists()
+
+
 def test_agent_stream_parser_renders_kimi_stream_json_events(tmp_path) -> None:
     """kimi stream-json: version head, assistant text+tool calls, retry, resume hint."""
     parser = AgentStreamParser("kimi")

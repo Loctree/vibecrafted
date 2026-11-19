@@ -7,7 +7,7 @@ order: 20
 
 # Environment variables
 
-Vibecrafted reads a small set of stable environment variables. They split into three groups: variables you set to relocate or configure the install, variables that steer provenance discovery, and variables the runtime injects into worker sessions — informational, never set by hand.
+Vibecrafted reads a small set of stable environment variables. They split into four groups: variables you set to relocate or configure the install, variables that steer provenance discovery, a limit you may place on a provider, and variables the runtime injects into worker sessions — informational, never set by hand.
 
 ## Install and location
 
@@ -49,6 +49,14 @@ VIBECRAFTED_FLEET_ROOT="$HOME/projects" vibecrafted receipt --json
 | -------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
 | `VIBECRAFTED_DOCKER_SEED_SKILLS` | `1`     | Set to `0` to disable first-run skill seeding into `/workspace/.vibecrafted` when you mount your own runtime store |
 
+## Provider limits
+
+| Variable                        | Default | Effect                                                                                                   |
+| ------------------------------- | ------- | -------------------------------------------------------------------------------------------------------- |
+| `VIBECRAFTED_AGY_PRINT_TIMEOUT` | unset   | Wall-clock limit for one headless `agy` turn, as a duration such as `45m` or `1h30m`. Unset or `0`: none |
+
+No provider is bounded by default: a headless turn runs until the worker finishes it. Set the limit only when you want `agy` cut off after a fixed time. A turn that hits it is recorded as failed, not completed, because nothing after the cut ran, including the commit and the report. A value that is not a duration is refused at launch.
+
 ## Worker contract (injected — read-only)
 
 When Vibecrafted launches a workflow run, it injects the run identity into the worker's environment. These are the contract surface a worker (or any tooling you hook into a run) can rely on. **Do not set them yourself** — the launcher owns them, and stale values are actively cleaned between runs.
@@ -68,7 +76,7 @@ printf 'run:    %s\nreport: %s\n' "${VIBECRAFTED_RUN_ID:-unset}" "${VIBECRAFTED_
 
 ## Stability notes
 
-- The variables in the first three tables are the stable, public surface.
+- The variables in the first four tables are the stable, public surface.
 - Additional `VIBECRAFTED_*` variables exist inside the runtime (session ambience, marbles loops, operator sessions). They are internal wiring, subject to change without notice — build nothing on them.
 - Agent CLI credentials are read from each agent's own environment and config stores. Vibecrafted never stores secrets; skills read credentials from environment variables only.
 

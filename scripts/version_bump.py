@@ -43,6 +43,7 @@ CARGO_LOCK_PACKAGES = {
     Path("vibecrafted-app/Cargo.lock"): ("control-core",),
 }
 PLUGIN_MANIFEST_RELATIVE = Path("plugin.json")
+SOURCE_COMPONENTS_RELATIVE = Path("config/source-components.json")
 RELEASE_TEXT_PROJECTIONS = {
     Path("vibecrafted-app/shell-agent/app/project.yml"): (
         re.compile(
@@ -77,6 +78,27 @@ def check_version_declarations(version_file: Path) -> str:
     """Fail when a packaged product projection drifts from root VERSION."""
     current = version_file.read_text(encoding="utf-8").strip()
     _parse_version(current)
+    frame_pin = version_file.parent / SOURCE_COMPONENTS_RELATIVE
+    if frame_pin.exists():
+        # Frame is an external product on its own SemVer. The pin names a
+        # Frame commit, so it is versioned in its own repository; here it only
+        # has to fall inside the range the runtime accepts on PATH.
+        components = json.loads(frame_pin.read_text(encoding="utf-8")).get(
+            "components", {}
+        )
+        frame = str(components.get("vc-frame", {}).get("version", ""))
+        products = _external_products()
+        match = SEMVER_RE.match(frame)
+        if (
+            match is None
+            or not products.FRAME_MIN
+            <= tuple(int(part) for part in match.groups())
+            < products.FRAME_MAX
+        ):
+            raise ValueError(
+                f"Frame pin outside the required vc-frame range: "
+                f"{frame_pin}#vc-frame={frame}; {products.FRAME_HINT}"
+            )
     projections = _version_projections(version_file)
     if projections is None:
         return current
@@ -126,6 +148,25 @@ def check_version_declarations(version_file: Path) -> str:
                 lock_path.read_text(encoding="utf-8"), package_names, current, current
             )
     return current
+
+
+def _external_products():
+    """The runtime's own owner of the external product ranges."""
+    import importlib.util
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "vibecrafted-core"
+        / "vibecrafted_core"
+        / "external_products.py"
+    )
+    spec = importlib.util.spec_from_file_location("_version_external_products", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load external product ranges from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _parse_version(value: str) -> tuple[int, int, int]:

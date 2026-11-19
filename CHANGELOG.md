@@ -5,11 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-11-20
+
 ### Changed
 
 - Vibecrafted.app and its macOS Runtime Pack no longer bundle vc-terminal,
   vc-frame, or terminal fonts. Install [vc-terminal](https://github.com/vetcoders/vc-terminal/releases)
-  0.18.0 or newer in `/Applications/vc-terminal.app` and [vc-frame](https://github.com/vetcoders/vc-frame/releases)
+  0.18.0 or newer in `/Applications/vc-terminal.app` and [vc-frame](https://github.com/Loctree/vc-frame/releases)
   4.5.1 or newer (below 5.0.0) on your PATH. The runtime checks product identity
   and compatibility and reports an install hint when a dependency is missing;
   its installer leaves both independent products in their own release channels.
@@ -20,12 +22,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - The Vibecrafted terminal window follows the 0.9 opacity / blur radius 20 /
   zero padding baseline. vc-terminal is pinned to `5d182a6a`, which adds
   `window.blur_radius`.
+- `make release-version-gate` checks that the Frame source pin lies inside the
+  vc-frame range the runtime requires (`>=4.5.1,<5.0.0`) instead of equal to
+  `VERSION`. Frame is no longer built into the product and keeps its own SemVer;
+  4.6.0 pins vc-frame 4.6.0.
 
 ### Fixed
 
 - The terminal no longer looks frosted grey behind translucent backgrounds:
   winit's fixed macOS blur radius of 80 is replaced by the configurable
   `window.blur_radius` (default 20).
+
+## [4.5.4] - 2026-11-18
+
+### Fixed
+
+- `vc-fork` continues a parent session that worked in another repository.
+  Claude stamps the copied history with the fork's own working directory, and
+  the fork was refused with "provider continuation inherited event content
+  changed".
+- The bundled Frame reports the product's version. 4.5.3 shipped the session
+  rail in a Frame that still called itself 4.5.1; `make release-version-gate`
+  now refuses a Frame pin whose version differs from `VERSION`.
+
+## [4.5.3] - 2026-11-18
+
+### Added
+
+- The session rail shows every terminal that is printing, in all sessions.
+  Frame observes sustained pane output itself, so builds, test runs and agents
+  that never animate their terminal title are visible next to the ones that do.
+  A single redraw or a once-a-second repaint does not count.
+- `vc-git worktrees cleanup` removes worktrees whose work is committed and
+  drops registrations of deleted directories; `vc-git branches cleanup`
+  deletes branch names fully contained in the target. Both list first, then
+  ask, and need `--yes` without a terminal.
+
+### Fixed
+
+- `vc-resume <agent> --run-id <id> '<prompt>'` continues that run in its own
+  checkout, model and provider session. It used to start a fresh workflow in
+  the caller's checkout and treat the first prompt word as a session name.
+- `make install`, `make release`, `make portable` and the Windows and Linux
+  Runtime Pack builders build from a checkout whose `origin` is the
+  repository's new home, `Loctree/vibecrafted`. The
+  builders named the old owner while Git named the new one, and source
+  provenance refused the pair. Packs record the owner of the repository they
+  were built from; the installer accepts both homes.
+- Headless `agy` workers are no longer cut off after 30 minutes. The launcher
+  passed a fixed `--print-timeout 30m`, which ended long turns before their
+  commit and report. A limit now applies only when
+  `VIBECRAFTED_AGY_PRINT_TIMEOUT` is set.
+- An `agy` turn that its print limit cut short is recorded as failed. `agy`
+  exits 0 and reports `SUCCESS` for such a turn; the run view showed a green
+  `SUCCESS` for work that had not finished.
+- `vibecrafted await` and other single-run reads on a finished run keep its
+  executor, worktree, report and model after the event stream has rotated. A
+  Guardian settlement notice used to replace them with a bare `guardian`
+  record, after which `vibecrafted resume` refused the run.
 
 ## [4.5.1] - 2026-10-26
 

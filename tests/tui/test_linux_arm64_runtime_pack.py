@@ -64,6 +64,9 @@ def test_runtime_inventory_uses_verified_donor_archive_digests(
     env = os.environ.copy()
     for name in ("TERMINAL_ARCHIVE_SHA256", "FRAME_ARCHIVE_SHA256"):
         env.pop(name, None)
+    # Both builders export the owner before the writer runs; the product's own
+    # executables point at that repository, never at a hard-coded one.
+    env["VIBECRAFTED_SOURCE_OWNER_REPO"] = "example-owner/vibecrafted"
     if builder == "linux":
         writer = source.split('PAYLOAD="$payload" SOURCE_REVISION=', 1)[1]
         writer = (
@@ -112,6 +115,7 @@ def test_runtime_inventory_uses_verified_donor_archive_digests(
             assert (
                 row["source_archive_sha256"] == hashlib.sha256(provenance).hexdigest()
             )
+            assert row["source_url"] == "https://github.com/example-owner/vibecrafted"
 
 
 def test_linux_arm64_is_no_longer_blocked_by_channel_foundations() -> None:

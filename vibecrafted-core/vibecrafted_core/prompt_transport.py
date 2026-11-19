@@ -11,6 +11,10 @@ prompt is inlined into the launch argv by the command builder — a deliberate
 ps/ARG_MAX tradeoff, since kimi offers no private alternative. This module
 owns both shapes so the async supervisor, the shell launcher and the tests
 agree on one encoder.
+
+It also owns the print-mode time limit (:func:`print_limit_flags`), for the
+same reason: the supervisor and the shell launcher must bound a turn the same
+way, or not at all.
 """
 
 from __future__ import annotations
@@ -18,8 +22,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 STREAM_JSON_AGENTS = frozenset({"agy"})
@@ -30,6 +35,12 @@ ARGV_PROMPT_AGENTS = frozenset({"kimi"})
 TEXT_TRANSPORT = "text"
 STREAM_JSON_TRANSPORT = "stream-json"
 ARGV_TRANSPORT = "argv"
+
+# Operator-set wall-clock limit for one agy print-mode turn. Unset means no
+# limit: agy then waits for the turn to complete, as every other provider does.
+AGY_PRINT_TIMEOUT_ENV = "VIBECRAFTED_AGY_PRINT_TIMEOUT"
+# Go duration syntax, as agy's ``--print-timeout`` parses it: 45m, 1h30m, 90s.
+_GO_DURATION_RE = re.compile(r"(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+")
 
 
 def stdin_transport(agent: str) -> str:
@@ -43,6 +54,31 @@ def stdin_transport(agent: str) -> str:
     if agent in ARGV_PROMPT_AGENTS:
         return ARGV_TRANSPORT
     return TEXT_TRANSPORT
+
+
+def print_limit_flags(
+    agent: str, environ: Mapping[str, str] | None = None
+) -> list[str]:
+    """Argv flags bounding one print-mode turn of *agent*; empty when unbounded.
+
+    The launcher imposes no limit of its own. When agy's print limit fires, the
+    turn is cut mid-work: the process still exits 0 and reports ``SUCCESS``,
+    but nothing was committed and no report was written. An operator who
+    wants agy bounded sets ``VIBECRAFTED_AGY_PRINT_TIMEOUT`` to a Go duration;
+    ``0`` and an empty value mean unbounded. Anything else is refused, so a
+    typo cannot silently remove or change the bound.
+    """
+    if agent != "agy":
+        return []
+    source = os.environ if environ is None else environ
+    raw = str(source.get(AGY_PRINT_TIMEOUT_ENV, "")).strip()
+    if raw in {"", "0", "0s"}:
+        return []
+    if not _GO_DURATION_RE.fullmatch(raw):
+        raise ValueError(
+            f"{AGY_PRINT_TIMEOUT_ENV}={raw!r} is not a duration such as 45m or 1h30m"
+        )
+    return ["--print-timeout", raw]
 
 
 def encode_stream_json_user_turn(prompt: str) -> bytes:
@@ -87,13 +123,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     """``python -m vibecrafted_core.prompt_transport AGENT PROMPT_FILE [TARGET]``.
 
     Shell launchers call this instead of carrying their own encoder. Prints the
-    materialized stdin path.
+    materialized stdin path. With ``--print-limit-flags AGENT`` it prints that
+    provider's print-mode limit flags instead (an empty line when unbounded).
     """
     parser = argparse.ArgumentParser(prog="vibecrafted_core.prompt_transport")
+    parser.add_argument("--print-limit-flags", action="store_true")
     parser.add_argument("agent")
-    parser.add_argument("prompt_file")
+    parser.add_argument("prompt_file", nargs="?")
     parser.add_argument("target", nargs="?")
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    if args.print_limit_flags:
+        try:
+            print(" ".join(print_limit_flags(args.agent)))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        return 0
+    if not args.prompt_file:
+        parser.error("prompt_file is required")
     target = Path(args.target) if args.target else None
     print(materialize_stdin_file(args.agent, Path(args.prompt_file), target))
     return 0

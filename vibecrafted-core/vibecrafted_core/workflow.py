@@ -6464,9 +6464,17 @@ def _operator_continue_prompt(
     extra_prompt: str,
     *,
     native_session: str,
+    finished: bool = False,
 ) -> str:
-    """Build the continuation prompt for a stopped/failed parent run."""
+    """Build the continuation prompt for a stopped, failed or finished parent run."""
     extra = str(extra_prompt or "")
+    if finished and native_session:
+        header = (
+            f"The tracked Vibecrafted run {run_id} ended its turn and the "
+            "operator is continuing it. Keep the same job, checkout and "
+            "evidence; do not restart from zero."
+        )
+        return f"{header}\n\n{extra}" if extra else header
     original = ""
     try:
         resolved = resolve_run(run_id)
@@ -6595,7 +6603,10 @@ def operator_continue_run(
             hint=f"vibecrafted observe {agent} --run-id {target}",
             run=parent,
         )
-    if state in OPERATOR_DONE_STATES and not _manual_stop_or_cancel(parent):
+    # A finished run is not relaunched on its own, but explicit operator input
+    # is a new instruction for that same job: continue it, never refuse it.
+    finished = state in OPERATOR_DONE_STATES and not _manual_stop_or_cancel(parent)
+    if finished and not (str(prompt or "").strip() or str(plan_text or "").strip()):
         return _operator_continue_rejection(
             target,
             "already_complete",
@@ -6620,7 +6631,7 @@ def operator_continue_run(
 
     native_session = _provider_session_for_continue(parent)
     prompt_body = _operator_continue_prompt(
-        target, parent, prompt, native_session=native_session
+        target, parent, prompt, native_session=native_session, finished=finished
     )
     resolved_source_dir = Path(source_dir).expanduser().resolve()
     resolved_root = normalize_run_root(

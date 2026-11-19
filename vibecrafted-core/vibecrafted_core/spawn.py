@@ -55,6 +55,7 @@ from .execution_controls import (
 from .failure_attribution import attribute_failure
 from .local_skills import LocalSkillError, resolve_execution_skill
 from .model_overrides import _with_model_override
+from .prompt_transport import print_limit_flags
 from .report_contract import (
     CLAIM_DIGEST_ENV,
     materialize_launcher_report_template,
@@ -2779,13 +2780,15 @@ class _ClaudeTranscriptUsage:
     @staticmethod
     def _inherited_digest(event: dict[str, Any], *, include_usage: bool = False) -> str:
         # Claude rewrites sessionId/slug/parentUuid and may recompute historical
-        # usage. UUID + immutable message content/version/cwd prove inheritance.
+        # usage. A fork also stamps the copied history with the fork's own cwd,
+        # so a parent that worked in another repository arrives with a different
+        # cwd. UUID + immutable message content/type/version prove inheritance.
         message = {
             key: value
             for key, value in event["message"].items()
             if include_usage or key != "usage"
         }
-        payload = {key: event.get(key) for key in ("uuid", "type", "version", "cwd")}
+        payload = {key: event.get(key) for key in ("uuid", "type", "version")}
         payload["message"] = message
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -5498,8 +5501,7 @@ def _default_command(
             *flags,
             "--add-dir",
             ".",
-            "--print-timeout",
-            "30m",
+            *print_limit_flags("agy"),
             "--print",
             prompt,
         ]
@@ -5612,8 +5614,7 @@ def _stdin_command(agent: str, controls: ExecutionControls | None = None) -> lis
             *flags,
             "--add-dir",
             ".",
-            "--print-timeout",
-            "30m",
+            *print_limit_flags("agy"),
             "--print=",
             "--input-format",
             "stream-json",
