@@ -7,9 +7,9 @@
       "revision": "87027da382aafaf1ec90589d50b0116c72c6397e"
     },
     "vc-terminal": {
-      "repository": "https://github.com/vetcoders/vc-terminal.git",
-      "version": "0.18.0-dev",
-      "revision": "256281fbad04d5fb2f9282f0dc400e3f26764152"
+      "repository": "https://github.com/Loctree/vc-terminal.git",
+      "version": "0.18.0",
+      "revision": "81ffaf7d893fd7f7ce0acb8de3fbd495a7d50802"
     }
   }
 }

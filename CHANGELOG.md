@@ -20,7 +20,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   families, then Anonymous Pro. Other fixed-width fonts installed on the Mac are
   no longer listed; a policy that already names one keeps it as current.
 - The Vibecrafted terminal window follows the 0.9 opacity / blur radius 20 /
-  zero padding baseline. vc-terminal is pinned to `5d182a6a`, which adds
+  zero padding baseline. It needs vc-terminal 0.18.0 (`81ffaf7d`), which adds
   `window.blur_radius`.
 - `make release-version-gate` checks that the Frame source pin lies inside the
   vc-frame range the runtime requires (`>=4.5.1,<5.0.0`) instead of equal to
