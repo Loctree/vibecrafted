@@ -152,7 +152,7 @@ Follow the shape the file already uses — it is what makes a hook actionable
 rather than a complaint:
 
 ```markdown
----
+***
 
 ## <YYYY-MM-DD> — <one-line title>
 

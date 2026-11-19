@@ -140,7 +140,7 @@ Analogiczna powierzchnia AICX: `~/.vibecrafted/aicx/aicx-fail.md`.
 Zachowaj kształt istniejącego pliku — czyni wpis użytecznym, zamiast skargą:
 
 ```markdown
----
+***
 
 ## <YYYY-MM-DD> — <one-line title>
 

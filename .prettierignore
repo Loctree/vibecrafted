@@ -5,3 +5,6 @@
 # YAML frontmatter as YAML and rewrites `{{X}}` as flow-mapping `{ { X } }`,
 # breaking the placeholder substitution. Keep the template byte-stable.
 skills/_template/
+
+# Keep the intentionally missing frontmatter delimiter in the negative fixture.
+tests/fixtures/corrupt_skill/SKILL.md
