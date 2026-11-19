@@ -49,6 +49,27 @@ VIBECRAFTED_FLEET_ROOT="$HOME/projects" vibecrafted receipt --json
 | -------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
 | `VIBECRAFTED_DOCKER_SEED_SKILLS` | `1`     | Set to `0` to disable first-run skill seeding into `/workspace/.vibecrafted` when you mount your own runtime store |
 
+## Precedent checks at launch
+
+Set `VIBECRAFTED_PRECEDENS_HOOK` to the absolute path of the trusted fleet
+`precedens-gate.py` to check the original task brief before a workflow starts.
+This applies to workflow launches and dispatch-plan worker launches. For
+`vibecrafted dispatch run` the enabled hook requires an explicit `--prompt-file`
+to supply the brief. An unset hook leaves ordinary launches unchanged.
+
+The hook reuses the caller's provider-session receipt. It accepts one
+consistent identity from `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, or
+`CODEX_SESSION_ID`. Use `VIBECRAFTED_PRECEDENS_SESSION_ID` if the shell
+filters those values or multiple provider identities are present.
+A new launch without a caller identity
+cannot borrow another session's receipt. Set these values in the operator's
+launcher environment. Worker configuration does not choose the admission hook.
+
+Refusals and invalid hook responses stop the launch before a worker starts.
+This checks the supplied brief. Coverage of native provider tools and
+the link between a continuation brief and its original case require separate
+verification.
+
 ## Worker contract (injected — read-only)
 
 When Vibecrafted launches a workflow run, it injects the run identity into the worker's environment. These are the contract surface a worker (or any tooling you hook into a run) can rely on. **Do not set them yourself** — the launcher owns them, and stale values are actively cleaned between runs.

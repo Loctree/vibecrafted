@@ -72,6 +72,7 @@ from .execution_controls import (
 from .init_resume import init_resume_block
 from .model_overrides import _model_override_receipt, _with_model_override
 from .package_resources import deck_path as package_deck_path
+from .precedent_admission import require_precedent
 from .process_control import process_identity_receipt, validate_process_identity
 from .repo_selection import (
     git_toplevel,
@@ -3229,7 +3230,8 @@ def launch_workflow(
     _normalized_runtime(spec.runtime)
     if spec.runtime_class not in {"living-tree", "local-worktrees"}:
         raise ValueError("unsupported execution runtime; no host adapter")
-    _source_prompt(spec)  # refuse source drift before any mutation
+    source_prompt = _source_prompt(spec)  # refuse source drift before any mutation
+    require_precedent(source_prompt, spec.root or source_dir)
     # Opportunistic pre-flight: before adding a run to the machine, take the dead
     # ones' survivors off it. Every spawn is the natural sweep point — it needs no
     # daemon, and it is exactly when the residue starts costing the new run cores.
