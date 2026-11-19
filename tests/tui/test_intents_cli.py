@@ -6,11 +6,11 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from argparse import Namespace
 from pathlib import Path
 
 import pytest
-import tomllib
 
 REPO = Path(__file__).resolve().parents[2]
 SKILLS = REPO / "vibecrafted-core/vibecrafted_core/skills"
