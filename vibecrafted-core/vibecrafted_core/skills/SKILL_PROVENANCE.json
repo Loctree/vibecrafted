@@ -1,6 +1,6 @@
 {
   "schema": "vibecrafted.skill-provenance.v3",
-  "generated_at": "2026-11-16",
+  "generated_at": "2026-11-19",
   "skills": {
     "vc-agents": {
       "sha256": [
@@ -1908,6 +1908,7 @@
           "ea098d580bec3552ab29e95fbece2d8647f92b03"
         ],
         "FLOW.md": [
+          "037b8a8dccff57100492417cbfb5c1291a7edee0",
           "09326f243272841ee9eb6e446a912d17a4dcd907",
           "10f9b74d46ba3caa903670d1c7401ba9f95dd626",
           "345455e763990fa8ce50b68c2c4c140593862af6",
@@ -1963,6 +1964,7 @@
           "859a5ed3fe453ad0ec2b7928e4cb77bfc5a085dd",
           "baee8f24641facaf812cb60c522a3a8429fe15de",
           "bb900bad7680f8ce4fefe1b48b6a41f99e4619f4",
+          "e75eb6762f51d5b8b8be717f6dac36e4b9d749a1",
           "fc3d5dc315fe8929639cf6765f48e81af9442088"
         ]
       }
@@ -2235,6 +2237,7 @@
           "fdf91c0cf4bfc9d2b30a32416b07409da3d18930"
         ],
         "FLOW.md": [
+          "0f3d644b6acef9c616398c5b094795e8e8e80c27",
           "2ff92b4aa3687649f1a009f4a3d7097d2f47107a",
           "3b52109b058d6eb2d2fb753beb25fb197beccff0",
           "528099a31fe05a60c8655dc4fbc279ca00ad0fa1",
@@ -2661,8 +2664,10 @@
           "fe4cbcf6922d0ac3770483761fb9d3432dec4705"
         ],
         "references/loctree-questions.md": [
+          "26f48079b96d6dcf11f938022b4199595252e9ff",
           "57c37c4593781bd3439b83043e9066484531b5a9",
           "8998065023b448373e6d56016f57b4a1b1b7e339",
+          "d0dbae75a8a7b0ed5a3cf133a4a8e84fbaeb8a72",
           "f0959b72551e0364ebdae4f43191a8a93471db4e"
         ],
         "references/replication.md": [
@@ -3963,6 +3968,7 @@
           "fbca94877a4598efa48468b18b69c7101dba2e08"
         ],
         "FLOW.md": [
+          "08ffe5dfb5f273bac99ce66c1512d299183e7cfb",
           "0f99c692f427130859656bb3903158e1374d3712",
           "2c288bf2a5e70e7419bc433abf609bde15b141c4",
           "b8f16800f97f38afcdff30cd8af3a09e9a606bcf",
