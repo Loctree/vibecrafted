@@ -32,6 +32,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - The terminal no longer looks frosted grey behind translucent backgrounds:
   winit's fixed macOS blur radius of 80 is replaced by the configurable
   `window.blur_radius` (default 20).
+- An agent tab no longer keeps overlapping lines after a font zoom. The pinned
+  vc-frame signals a pane once more after its size settles, so an agent that
+  dropped the last resize signal (agy) lays out for the pane's real width.
 
 ## [4.5.4] - 2026-11-18
 

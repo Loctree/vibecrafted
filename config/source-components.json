@@ -4,7 +4,7 @@
     "vc-frame": {
       "repository": "https://github.com/Loctree/vc-frame.git",
       "version": "4.6.0",
-      "revision": "87027da382aafaf1ec90589d50b0116c72c6397e"
+      "revision": "1c7965a07035aac23c6631711b0f83cbabbb8797"
     },
     "vc-terminal": {
       "repository": "https://github.com/Loctree/vc-terminal.git",
