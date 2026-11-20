@@ -1249,7 +1249,9 @@ def crash(source, destination):
         raise OSError("injected pointer publication failure")
     real_replace(source, destination)
     if ((cut == "directory-gap" and src == Path(product))
-        or (cut == "launcher" and dst == Path(launcher) / "vc-terminal")
+        # Any published launcher: a Darwin generation publishes no vc-terminal
+        # launcher, because the terminal is the standalone external product.
+        or (cut == "launcher" and dst.parent == Path(launcher))
         or (cut == "selector" and dst == Path(runtime) / "active.json")
         or (cut == "rollback" and rollback and dst == Path(product))):
         os._exit(86)
