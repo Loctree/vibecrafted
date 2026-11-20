@@ -117,8 +117,6 @@ def _cold_fixture(tmp_path: Path, *, damage="none", force_json_plutil: bool = Fa
     _write_host_pack_double(pack, "darwin-arm64", "arm64")
     bundled = pack_dir / pack.name
     shutil.copy2(pack, bundled)
-    if damage == "mismatch":
-        bundled.write_bytes(b"different signed App generation\n")
     for suffix in (".sig", ".sha256"):
         Path(str(pack) + suffix).write_text("pack-sidecar-double\n")
 
@@ -178,20 +176,24 @@ with open(os.environ['EVENTS'], 'a') as log:
     _write_executable(scripts / "vc-app-update.sh", helper)
     _write_executable(
         scripts / "install-runtime-pack.sh",
-        '#!/bin/bash\nset -e\nif [[ "$*" == *--verify-only* ]]; then\necho pack-verified >> "$EVENTS"\nelse\necho runtime-published >> "$EVENTS"\necho new-runtime > "$RUNTIME_POINTER"\nfi\n',
+        '#!/bin/bash\nset -e\nif [[ "$DAMAGE" == publish ]]; then\necho "fixture pack publication refused" >&2\nexit 1\nfi\necho runtime-published >> "$EVENTS"\necho new-runtime > "$RUNTIME_POINTER"\n',
     )
     _write_executable(
         scripts / "install-foundations.sh",
         '#!/bin/bash\necho foundations-double >> "$EVENTS"\n',
     )
-    # OS running-App inventory double: production ctypes adapter is exercised
-    # independently below, and identity failures must stop the real bootstrap.
+    # The bootstrap requires the canonical Main identity helper in the candidate
+    # (the App updater owns it); the cold channel itself never runs it.
     (scripts / "lib/app-main-identity.py").write_text(
-        "import os,sys\n"
-        "from pathlib import Path\n"
+        "import os\n"
         "with open(os.environ['EVENTS'],'a') as f: f.write('main-identity\\n')\n"
-        "if os.environ['DAMAGE'] == 'ambiguous': raise SystemExit('ambiguous destination Main instances')\n"
     )
+    # The bootstrap reports external terminal/frame prerequisites through the
+    # real resolver before installing; the source candidate must carry it.
+    core = source / "vibecrafted-core/vibecrafted_core"
+    core.mkdir(parents=True)
+    for name in ("external_products.py", "terminal_host.py"):
+        shutil.copy2(ROOT / "vibecrafted-core/vibecrafted_core" / name, core)
     _write_distribution_manifest_stub(source)
     archive = server / "portable.tar.gz"
     _write_v2_archive(source, archive, "vibecrafted-fixture")
@@ -293,13 +295,11 @@ if sys.argv[1] == 'attach':
             "if not isinstance(value,str): raise SystemExit(1)\n"
             "print(value)\n",
         )
+    # Since the runtime-only App (bf56b81f) the bootstrap pairs no App and
+    # installs no DMG; `destination` is where a prior App would live, and
+    # every test holds that the bootstrap leaves it alone.
     install = tmp_path / "install.sh"
-    install.write_text(
-        BOOTSTRAP.read_text().replace(
-            'PAIRED_APP_ROOT="/Applications/Vibecrafted.app"',
-            f"PAIRED_APP_ROOT={shlex.quote(str(destination))}",
-        )
-    )
+    install.write_text(BOOTSTRAP.read_text())
     temporary = tmp_path / "temporary"
     temporary.mkdir()
     env = dict(
@@ -364,36 +364,38 @@ def test_no_host_python_or_swift_cold_channel_install(
         )
     result = _run_cold(install, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (destination / "Contents/MacOS/vc-terminal").is_file()
     events = Path(env["EVENTS"]).read_text().splitlines()
     assert not any("forbidden" in event for event in events)
-    assert events.index("notarized") < events.index("carrier-python")
+    # The DMG App is authenticated only as the carrier of the interpreter.
     assert any(
         'identifier "io.vetcoders.vibecrafted"' in event and "MW223P3NPX" in event
         for event in events
     )
-    assert events.index("pack-verified") < events.index("runtime-published")
-    assert "opened" in events
-    receipts = list(Path(env["VIBECRAFTED_HOME"]).rglob("receipt.json"))
-    assert len(receipts) == 1
-    receipt = json.loads(receipts[0].read_text())
-    assert receipt["replaced"] is True and receipt["relaunched"] is True
-    assert (
-        json.loads(receipts[0].with_name("journal.json").read_text())["phase"]
-        == "relaunched"
-    )
+    assert events.index("notarized") < events.index("carrier-python")
+    assert events.index("carrier-python") < events.index("runtime-published")
+    # External terminal/frame products are reported as prerequisites; whether
+    # they are present depends on the host, so only the report is asserted.
+    assert "vc-frame: " in result.stdout and "vc-terminal: " in result.stdout
+    # No App transaction: nothing published to /Applications, no receipt.
+    assert not destination.exists()
+    assert "opened" not in events
+    assert not list(Path(env["VIBECRAFTED_HOME"]).rglob("receipt.json"))
     assert Path(env["RUNTIME_POINTER"]).read_text().strip() == "new-runtime"
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS native payload fixture")
-def test_cold_channel_runs_real_runtime_pack_publication_and_settlement(
+def test_cold_channel_runs_real_runtime_pack_publication(
     tmp_path: Path,
 ) -> None:
-    """Real pack signature/inventory/install/resolve and real App settlement.
+    """Real pack signature/inventory/install/resolve from the cold channel.
 
-    Native signing, GUI launch, process inventory and portable-Python delegation
-    remain explicit fixture boundaries; these fixtures are not release artifacts.
+    Native signing, process inventory and portable-Python delegation remain
+    explicit fixture boundaries; these fixtures are not release artifacts.
+    The pack carries no terminal or frame; the installed runtime resolves the
+    independently installed products, here private copies under tmp_path.
     """
+    import plistlib
+
     from _runtime_pack_fixture import private_runtime_pack_seed
 
     from tests.tui.test_runtime_pack_rescue import _seal_runtime_pack_for_admission
@@ -402,10 +404,24 @@ def test_cold_channel_runs_real_runtime_pack_publication_and_settlement(
     source = tmp_path / "source"
     app = Path(env["DMG_APP"])
     server = Path(env["FAKE_RELEASE_ROOT"])
-    tools = Path(env["PATH"].split(":")[0])
-    payload = private_runtime_pack_seed(
-        destination / "Contents/MacOS/vc-terminal", fixture_root=tmp_path
-    )(
+    terminal = tmp_path / "Applications/vc-terminal.app/Contents/MacOS/vc-terminal"
+    terminal.parent.mkdir(parents=True)
+    shutil.copyfile("/usr/bin/true", terminal)
+    terminal.chmod(0o755)
+    (terminal.parents[1] / "Info.plist").write_bytes(
+        plistlib.dumps(
+            {
+                "CFBundleIdentifier": "io.vetcoders.vc-terminal",
+                "CFBundleExecutable": "vc-terminal",
+                "CFBundleShortVersionString": "0.18.0",
+            }
+        )
+    )
+    (tmp_path / "external-bin").mkdir()
+    _write_executable(
+        tmp_path / "external-bin/vc-frame", '#!/bin/sh\necho "vc-frame 4.6.0"\n'
+    )
+    payload = private_runtime_pack_seed(terminal, fixture_root=tmp_path)(
         tmp_path / "payload",
         version="9.9.9+cold",
         before_source_seal=_write_carrier_python,
@@ -454,57 +470,10 @@ def test_cold_channel_runs_real_runtime_pack_publication_and_settlement(
         )
         if scripts != pack_dir:
             shutil.copy2(public, scripts / "vibecrafted-signing-v1.pub")
-    # Restore the actual app-update owner, including its real pack publication
-    # and settlement functions. Redirect only system signing/open boundaries.
-    helper = UPDATER.read_text().replace(
-        "/usr/bin/codesign", shlex.quote(str(tools / "codesign"))
-    )
-    _write_executable(tools / "ps", "#!/bin/sh\nexit 0\n")
-    helper = helper.replace("/bin/ps", str(tools / "ps"))
-    helper = helper.replace(
-        'OPEN_BIN="/usr/bin/open"', f"OPEN_BIN={shlex.quote(str(tools / 'open'))}"
-    )
-    _write_executable(source / "scripts/vc-app-update.sh", helper)
-    signer = tools / "codesign"
-    signer.write_text(
-        signer.read_text().replace("fixture-identity", "abcdef0123456789")
-    )
+    # The DMG App carries the runtime only; its interpreter is the carrier.
     runtime = app / "Contents/Resources/runtime"
     shutil.rmtree(runtime)
     shutil.copytree(payload, runtime)
-    for name, target in (
-        ("vc-terminal", app / "Contents/MacOS/vc-terminal"),
-        ("vc-frame", app / "Contents/Helpers/vc-frame"),
-    ):
-        shutil.copy2(payload / "libexec" / name, target)
-    # Product identity and source/module bindings are consumed by the actual
-    # installer and capture settlement, rather than synthesized success bits.
-    import plistlib
-
-    (app / "Contents/Info.plist").write_bytes(
-        plistlib.dumps(
-            {
-                "CFBundleIdentifier": "io.vetcoders.vibecrafted",
-                "CFBundleExecutable": "Vibecrafted",
-                "CFBundleName": "Vibecrafted",
-                "CFBundleDisplayName": "Vibecrafted",
-                "CFBundleIconFile": "Vibecrafted.icns",
-            }
-        )
-    )
-    (app / "Contents/Resources/Vibecrafted.icns").write_bytes(b"fixture-icon")
-    (app / "Contents/Resources/product-manifest.json").write_text(
-        json.dumps(
-            {
-                "schema": "io.vetcoders.vibecrafted.product.v1",
-                "git_sha": "b" * 40,
-                "modules": [
-                    {"module": "vc-terminal", "git_sha": "2" * 40},
-                    {"module": "vc-frame", "git_sha": "3" * 40},
-                ],
-            }
-        )
-    )
     _write_distribution_manifest_stub(source)
     provenance = source / "source-provenance.json"
     record = json.loads(provenance.read_text())
@@ -543,17 +512,14 @@ def test_cold_channel_runs_real_runtime_pack_publication_and_settlement(
     assert result.returncode == 0, result.stdout + result.stderr
     runtime_home = Path(env["VIBECRAFTED_RUNTIME_HOME"])
     pointer = json.loads((runtime_home / "active.json").read_text())
-    assert pointer["version"] == "9.9.9+cold" and pointer["app_root"] == str(
-        destination
-    )
+    assert pointer["version"] == "9.9.9+cold"
+    assert not pointer.get("app_root")
     receipt = json.loads((runtime_home / "install-receipt.json").read_text())
     assert receipt["schema"] == "vibecrafted.runtime-install.v1"
     assert not receipt.get("install_pending")
-    settlements = list(
-        Path(env["VIBECRAFTED_HOME"]).rglob("receipt.json.settlement.json")
-    )
-    assert len(settlements) == 1
-    assert json.loads(settlements[0].read_text())["status"] == "disposed"
+    # Runtime only: no App transaction, nothing published to /Applications.
+    assert not destination.exists()
+    assert not list(Path(env["VIBECRAFTED_HOME"]).rglob("receipt.json"))
 
 
 def test_attended_cancel_fetches_no_dmg_or_carrier_code(
@@ -575,32 +541,24 @@ def test_attended_cancel_fetches_no_dmg_or_carrier_code(
     assert not Path(env["EVENTS"]).exists()
 
 
-@pytest.mark.parametrize("old_pack", [False, True])
-def test_same_helpers_only_skip_app_transaction_for_identical_generation(
-    tmp_path: Path, old_pack: bool
-) -> None:
+def test_cold_channel_leaves_an_installed_app_untouched(tmp_path: Path) -> None:
+    # A prior App, even one carrying an older pack, is the App updater's to
+    # replace; the bootstrap publishes the runtime only.
     install, destination, env = _cold_fixture(tmp_path)
     shutil.copytree(env["DMG_APP"], destination)
     bundled = next((destination / "Contents/Resources/runtime-pack").glob("*.tar.gz"))
-    if old_pack:
-        bundled.write_bytes(b"prior-generation-with-the-same-donors")
-        (destination / "prior-state").write_text("old Main and modules")
+    bundled.write_bytes(b"prior-generation")
+    (destination / "prior-state").write_text("old Main and modules")
     result = _run_cold(install, env)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (
-        bundled.read_bytes()
-        == (Path(env["FAKE_RELEASE_ROOT"]) / bundled.name).read_bytes()
-    )
-    receipts = list(Path(env["VIBECRAFTED_HOME"]).rglob("receipt.json"))
-    assert len(receipts) == (1 if old_pack else 0)
-    assert not (destination / "prior-state").exists()
+    assert bundled.read_bytes() == b"prior-generation"
+    assert (destination / "prior-state").read_text() == "old Main and modules"
+    assert not list(Path(env["VIBECRAFTED_HOME"]).rglob("receipt.json"))
     assert Path(env["RUNTIME_POINTER"]).read_text().strip() == "new-runtime"
 
 
-@pytest.mark.parametrize(
-    "damage", ["trust", "foreign", "source-signature", "mismatch", "ambiguous"]
-)
-def test_failed_trust_or_ambiguous_owner_preserves_prior(
+@pytest.mark.parametrize("damage", ["trust", "foreign", "source-signature", "publish"])
+def test_failed_trust_or_publication_preserves_prior(
     tmp_path: Path, damage: str
 ) -> None:
     install, destination, env = _cold_fixture(tmp_path, damage=damage)

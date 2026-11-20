@@ -213,17 +213,31 @@ def test_three_upgrades_retire_only_old_bundles_and_uninstall_clears_retained(
         info.parent.mkdir(parents=True)
         info.write_text("synthetic bundle, never launched")
 
+    contract = installer._runtime_pack_contract_module()
     # Initial install followed by three upgrades, with one healthy rollback kept.
+    # Generations 0-2 are history: packs released before external products (B2)
+    # carried their own terminal bundle in their sealed inventory, so they are
+    # admitted with the B2 carry guards lifted. Generation 3 is a B2 pack.
     for number in range(4):
+        historical = number < 3
         payload = seed_runtime_pack(
             tmp_path / f"pack-{number}",
             version=f"9.9.{number}+r4",
         )
-        add_bundle(payload)
-        _seal_runtime_pack_for_admission(payload)
-        assert installer.cmd_runtime_install(_ns(payload)) == 0
+        with monkeypatch.context() as history:
+            if historical:
+                add_bundle(payload)
+                history.setattr(
+                    contract, "_runtime_product_payload", lambda *a, **k: None
+                )
+                history.setattr(
+                    installer, "_refuse_embedded_darwin_products", lambda root: None
+                )
+            _seal_runtime_pack_for_admission(payload)
+            assert installer.cmd_runtime_install(_ns(payload)) == 0
         result = json.loads(capsys.readouterr().out.splitlines()[-1])
         generations.append(Path(result["root"]))
+        assert (generations[-1] / "libexec/vc-terminal.app").is_dir() is historical
         assert json.loads((roots["runtime_home"] / "active.json").read_text())[
             "runtime_root"
         ] == str(generations[-1])
@@ -241,4 +255,6 @@ def test_three_upgrades_retire_only_old_bundles_and_uninstall_clears_retained(
     assert installer.cmd_runtime_uninstall(Namespace(dry_run=False, json=True)) == 0
     result = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert result["launchservices"]["status"] == "unregistered"
-    assert calls == [g / "libexec/vc-terminal.app" for g in generations]
+    # The retained historical rollback is unregistered; the B2 generation has
+    # no bundle of its own to unregister.
+    assert calls == [g / "libexec/vc-terminal.app" for g in generations[:3]]
