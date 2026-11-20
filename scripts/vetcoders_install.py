@@ -28570,19 +28570,21 @@ def _install_runtime_pack(
         if sys.platform == "darwin"
         else {}
     )
-    foundations = _ensure_foundations_installed(
-        payload_root,
-        skip=bool(getattr(args, "skip_foundations", False)),
-        targets=("loctree", "aicx", "prview", "screenscribe")
-        if sys.platform == "darwin"
-        else (),
-        environment={
-            "VIBECRAFTED_SOURCE": str(payload_root),
-            "VIBECRAFTED_RUNTIME_HOME": str(runtime_home),
-            "VIBECRAFTED_LAUNCHER_BIN": str(paths["launcher_home"]),
-        },
-    )
-    if foundations["status"] == "failed":
+    foundations = None
+    if sys.platform == "darwin":
+        foundations = _ensure_foundations_installed(
+            payload_root,
+            skip=bool(getattr(args, "skip_foundations", False)),
+            # Preserve the default required channels without running the old
+            # post-publication cockpit check or optional agent/plugin setup.
+            targets=("loctree", "aicx"),
+            environment={
+                "VIBECRAFTED_SOURCE": str(payload_root),
+                "VIBECRAFTED_RUNTIME_HOME": str(runtime_home),
+                "VIBECRAFTED_LAUNCHER_BIN": str(paths["launcher_home"]),
+            },
+        )
+    if foundations is not None and foundations["status"] == "failed":
         raise RuntimeInstallRefusal(
             "Required foundations could not be admitted; correct the foundation "
             "failure shown above and retry Upgrade."
@@ -29081,6 +29083,12 @@ def _install_runtime_pack(
     )
     if not rescue_record:
         result["retirement"] = _finish_runtime_retirement(paths, receipt)
+    if foundations is None:
+        # Other platforms retain their existing foundations lifecycle.
+        foundations = _ensure_foundations_installed(
+            generation,
+            skip=bool(getattr(args, "skip_foundations", False)),
+        )
     result["foundations"] = foundations
     if external_products:
         result["terminal_host"] = external_products["terminal"]
@@ -29091,7 +29099,7 @@ def _install_runtime_pack(
         }
     if emit_result:
         print(json.dumps(result, sort_keys=True))
-    # Prerequisite failures have already refused before publication.
+    # Darwin prerequisite failures have already refused before publication.
     return (
         0
         if not projection_conflicts
