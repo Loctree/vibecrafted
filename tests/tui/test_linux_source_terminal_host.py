@@ -37,7 +37,11 @@ def test_source_candidate_keeps_terminal_wrapper_without_native_host(
     assert not host.exists()
 
 
-def test_runtime_pack_still_requires_native_terminal_host(tmp_path: Path) -> None:
+def test_runtime_pack_still_requires_native_terminal_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Linux packs carry their host; darwin resolves the external vc-terminal.
+    monkeypatch.setattr(installer.sys, "platform", "linux")
     runtime_root = tmp_path / "pack-generation"
     _write_wrapper(runtime_root)
 

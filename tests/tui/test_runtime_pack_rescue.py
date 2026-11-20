@@ -32,14 +32,16 @@ def _seal_runtime_pack_for_admission(payload: Path) -> Path:
     """
     contract = installer._runtime_pack_contract_module()
     (payload / "bin").mkdir(parents=True, exist_ok=True)
-    (payload / "libexec").mkdir(parents=True, exist_ok=True)
     (payload / "scripts").mkdir(parents=True, exist_ok=True)
     scripts = Path(installer.__file__).resolve().parent
     for product in ("vc-terminal", "vc-frame"):
         wrapper = payload / "bin" / product
         wrapper.write_text((scripts / f"{product}-product-entry.sh").read_text())
         wrapper.chmod(0o755)
+    # A Darwin pack carries no libexec at all (B2): an empty directory would be
+    # an unsealed child that a historical generation cannot prove at retirement.
     if sys.platform != "darwin":
+        (payload / "libexec").mkdir(parents=True, exist_ok=True)
         donor = Path("/usr/bin/true")
         native = payload / "libexec/vc-terminal"
         if donor.is_file():
@@ -2303,56 +2305,32 @@ def test_normal_missing_history_recovery_preserves_unknown_user_configuration(
 
 
 @pytest.mark.parametrize(
-    "damage", ["missing", "malformed", "symlink", "code", "team", "main-team"]
+    "carried", ["libexec/vc-terminal", "libexec/vc-terminal.app", "libexec/vc-frame"]
 )
-def test_private_paired_host_refuses_drift_and_preserves_prior_runtime(
-    tmp_path, roots, installed, monkeypatch, capsys, damage
+def test_a_pack_carrying_an_external_product_is_refused_and_keeps_prior_runtime(
+    tmp_path, roots, installed, monkeypatch, carried
 ):
-    # Exercise Darwin admission even on Linux using real native fixture bytes.
+    """Terminal and Frame are independent products on darwin (d89a59eb).
+
+    Installation no longer pairs a pack with a terminal binary; a pack that
+    stages either product is refused before anything of the prior runtime moves.
+    """
     monkeypatch.setattr(installer.sys, "platform", "darwin")
-    host = installer._FIXED_TERMINAL_HOST
-    generation = Path(installed[2]["root"])
-    assert host.read_bytes() == (generation / "libexec/vc-terminal").read_bytes()
-    assert (
-        installer._product_terminal_host(generation=generation, app_root=None) == host
-    )
     before = {
         str(p.relative_to(roots["runtime_home"])): p.read_bytes()
         for p in roots["runtime_home"].rglob("*")
         if p.is_file() and not p.is_symlink()
     }
-    if damage == "missing":
-        host.unlink()
-    elif damage == "malformed":
-        (host.parents[1] / "Info.plist").write_bytes(b"invalid plist")
-    elif damage == "symlink":
-        target = host.with_name("foreign-native")
-        host.rename(target)
-        host.symlink_to(target)
-    elif damage == "code":
-        host.write_bytes(host.read_bytes() + b"foreign code")
-    else:
-        original = installer._signed_terminal_identity
-        monkeypatch.setattr(
-            installer,
-            "_signed_terminal_identity",
-            lambda p: (
-                original(p)[0],
-                "FOREIGN_TEAM"
-                if p == (host if damage == "team" else host.parents[2])
-                else original(p)[1],
-            ),
-        )
-    payload = seed_runtime_pack(tmp_path / "new-candidate", version="9.9.9+drift")
+    payload = seed_runtime_pack(tmp_path / "new-candidate", version="9.9.9+carried")
     _seal_runtime_pack_for_admission(payload)
-    reason = (
-        "host missing or malformed"
-        if damage in {"missing", "malformed", "symlink"}
-        else "main app and terminal signing owners differ"
-        if damage == "main-team"
-        else "differs from this Runtime Pack's signed terminal"
-    )
-    with pytest.raises(installer.RuntimeInstallRefusal, match=reason):
+    staged = payload / carried
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    if carried.endswith(".app"):
+        staged.mkdir()
+    else:
+        shutil.copyfile("/usr/bin/true", staged)
+        staged.chmod(0o755)
+    with pytest.raises(installer.RuntimeInstallRefusal, match="must not be staged"):
         installer.cmd_runtime_install(_ns(payload))
     after = {
         str(p.relative_to(roots["runtime_home"])): p.read_bytes()

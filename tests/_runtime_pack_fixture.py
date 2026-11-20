@@ -382,7 +382,8 @@ def _vc_fixture_product_identity(path):
 _vc_fixture_products.terminal_host.static_code_identity = _vc_fixture_product_identity
 _vc_fixture_frame_resolver = _vc_fixture_products.resolve_frame
 def _vc_fixture_frame(**kwargs):
-    return _vc_fixture_frame_resolver(search_path=str(_VC_FIXTURE_ROOT / "external-bin"), runtime=kwargs.get("runtime"))
+    # fixed_terminal_fixture places Frame beside the fixed Terminal host.
+    return _vc_fixture_frame_resolver(search_path=str(_FIXED_TERMINAL_HOST.parents[4] / "external-bin"), runtime=kwargs.get("runtime"))
 _vc_fixture_products.resolve_frame = _vc_fixture_frame
 _external_products = lambda: _vc_fixture_products
 

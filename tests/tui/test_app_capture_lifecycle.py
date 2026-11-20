@@ -243,7 +243,9 @@ def app(path: Path, number: int) -> Path:
         shutil.copy(ROOT / "scripts" / name, script_root / name)
     core = resources / "runtime/vibecrafted-core/vibecrafted_core"
     core.mkdir(parents=True)
-    shutil.copy(ROOT / "vibecrafted-core/vibecrafted_core/runtime_paths.py", core)
+    # The installer resolves the external Terminal and Frame through these.
+    for name in ("runtime_paths.py", "external_products.py", "terminal_host.py"):
+        shutil.copy(ROOT / "vibecrafted-core/vibecrafted_core" / name, core)
     bind_private_child_installer(
         resources / "runtime",
         installer._FIXED_TERMINAL_HOST,
