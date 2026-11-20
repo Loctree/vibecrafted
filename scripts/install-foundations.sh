@@ -26,14 +26,15 @@ set -euo pipefail
 # Product spine (audit SF-2): vc-frame is an independent product with its own
 # release. A compatible vc-frame already on PATH is kept; otherwise its pinned
 # release is installed into a versioned store with the launcher bin linked to
-# it. Then the gate is COCKPIT READY, not PATH-only:
+# it. Real provisioning ends at resolver admission (S2); the carrier checks
+# runtime configuration after publication. The historical --check cockpit
+# inspection still covers:
 #   1. binary exists AND runs
 #   2. product identity (vc-frame, not stock zellij)
 #   3. live physical config.kdl; Launchpad is the layout asset (Frame owns host chrome)
 #   4. operator scripts (at least vc-composer.sh) install-managed or present
 #   5. launch door on PATH (vc-start and/or vibecrafted)
-# Missing any of the hard checks fails foundations so install cannot "succeed"
-# without a rideable operator surface.
+# The carrier owns the final rideable operator surface, not this product step.
 # ---------------------------------------------------------------------------
 
 LOCTREE_NPM_PACKAGE="@loctree/loctree"
@@ -96,7 +97,8 @@ FOUNDATION_PRIVATE_BIN=""
 die()  { printf '\033[31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 info() { printf '\033[36m▸\033[0m %s\n' "$*"; }
 ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
-warn() { printf '\033[33m!\033[0m %s\n' "$*"; }
+FOUNDATION_LAST_WARNING=""
+warn() { FOUNDATION_LAST_WARNING="$*"; printf '\033[33m!\033[0m %s\n' "$*" >&2; }
 
 # CI keeps the last few stderr lines and drops earlier stdout. Repeat the
 # required-failure name at the end of stderr. The runtime installer already
@@ -675,6 +677,15 @@ vcframe_link_is_managed() {
   [[ "$target" == "$VCFRAME_STORE/"*/vc-frame ]]
 }
 
+# S4: only the previous generation's receipt can authorize a legacy file.
+# Never derive the expected hash from the launcher being replaced.
+vcframe_link_is_replaceable() {
+  local link="$1" expected="${VIBECRAFTED_LEGACY_VCFRAME_SHA256:-}"
+  vcframe_link_is_managed "$link" && return 0
+  [[ -f "$link" && ! -L "$link" && "$expected" =~ ^[[:xdigit:]]{64}$ ]] || return 1
+  [[ "$(sha256_of "$link")" == "$expected" ]]
+}
+
 # The cockpit gate after a binary is in place.
 vcframe_cockpit_or_hint() {
   if ! verify_vcframe_cockpit; then
@@ -687,7 +698,9 @@ install_vcframe() {
   local probe pin repository version target asset base link
   if probe="$(vcframe_resolve)"; then
     ok "vc-frame already installed: $probe"
-    vcframe_cockpit_or_hint
+    # Keep the historical dry-run cockpit check; real provisioning precedes
+    # runtime config publication and is admitted solely by the S2 resolver.
+    if (( CHECK_ONLY )); then vcframe_cockpit_or_hint; else return 0; fi
     return
   fi
   link="$LAUNCHER_PREFIX/vc-frame"
@@ -711,7 +724,7 @@ install_vcframe() {
     return 0
   fi
 
-  if [[ -e "$link" || -L "$link" ]] && ! vcframe_link_is_managed "$link"; then
+  if [[ -e "$link" || -L "$link" ]] && ! vcframe_link_is_replaceable "$link"; then
     warn "vc-frame: $probe"
     warn "$link belongs to another install; not overwriting it. Remove or update it, then rerun."
     return 1
@@ -733,7 +746,7 @@ install_vcframe() {
     rm -rf "$work"
     return 1
   fi
-  mkdir -p "$work/stage"
+  mkdir -p "$work/stage" || { rm -rf "$work"; return 1; }
   if ! tar -xzf "$work/$asset" -C "$work/stage" vc-frame 2>/dev/null \
     || [[ ! -f "$work/stage/vc-frame" || -L "$work/stage/vc-frame" ]]; then
     warn "vc-frame $asset carries no vc-frame binary."
@@ -751,7 +764,7 @@ install_vcframe() {
       return 1
     fi
   fi
-  chmod 0755 "$work/stage/vc-frame"
+  chmod 0755 "$work/stage/vc-frame" || { rm -rf "$work"; return 1; }
   if ! probe="$(PATH="$work/stage" vcframe_resolve)"; then
     warn "Downloaded vc-frame is not compatible with this runtime: $probe"
     rm -rf "$work"
@@ -769,17 +782,33 @@ install_vcframe() {
       return 1
     fi
   else
-    mkdir -p "$VCFRAME_STORE"
+    mkdir -p "$VCFRAME_STORE" || { rm -rf "$work"; return 1; }
     staged="$(mktemp -d "$VCFRAME_STORE/.staging.XXXXXX")" || { rm -rf "$work"; return 1; }
-    install -m 0755 "$work/stage/vc-frame" "$staged/vc-frame"
-    mv "$staged" "$store"
+    if ! install -m 0755 "$work/stage/vc-frame" "$staged/vc-frame" \
+      || ! mv "$staged" "$store"; then
+      rm -rf "$staged" "$work"
+      warn "Cannot stage vc-frame in $VCFRAME_STORE; check directory permissions and retry."
+      return 1
+    fi
   fi
   rm -rf "$work"
 
   # Atomic relink: rename(2) replaces the managed symlink in one step.
-  mkdir -p "$LAUNCHER_PREFIX"
-  ln -s "$store/vc-frame" "$link.new.$$"
-  mv -f "$link.new.$$" "$link"
+  mkdir -p "$LAUNCHER_PREFIX" || return 1
+  # Recheck ownership after downloading; a changed foreign file must survive.
+  if [[ -e "$link" || -L "$link" ]] && ! vcframe_link_is_replaceable "$link"; then
+    warn "$link changed during provisioning; inspect its owner and retry the upgrade."
+    return 1
+  fi
+  if ! ln -s "$store/vc-frame" "$link.new.$$"; then
+    warn "Cannot stage the vc-frame launcher beside $link; check permissions and retry."
+    return 1
+  fi
+  if ! mv -f "$link.new.$$" "$link"; then
+    rm -f "$link.new.$$"
+    warn "Cannot replace $link atomically; check permissions and retry."
+    return 1
+  fi
   case ":$PATH:" in
     *":$LAUNCHER_PREFIX:"*) ;;
     *) export PATH="$LAUNCHER_PREFIX:$PATH" ;;
@@ -789,7 +818,7 @@ install_vcframe() {
     return 1
   fi
   ok "Installed vc-frame $version from $base/$asset: $link -> $store/vc-frame"
-  vcframe_cockpit_or_hint
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -811,8 +840,12 @@ vcterminal_resolve() {
 
 install_vcterminal() {
   if [[ "$(detect_os)" != "macos" ]]; then
-    info "vc-terminal is a macOS app; nothing to install on $(detect_os)."
-    return 0
+    if (( CHECK_ONLY )); then
+      info "vc-terminal is a macOS app; nothing to install on $(detect_os)."
+      return 0
+    fi
+    warn "vc-terminal requires macOS; omit this target on $(detect_os)."
+    return 1
   fi
   local probe pin repository version base target asset
   if probe="$(vcterminal_resolve)"; then
@@ -842,12 +875,12 @@ install_vcterminal() {
   fi
   if [[ -e "$VCTERMINAL_APP" || -L "$VCTERMINAL_APP" ]]; then
     warn "vc-terminal: $probe"
-    warn "$VCTERMINAL_APP is another install; not replacing it. Quit it and install vc-terminal $version from $repository/releases."
+    warn "$VCTERMINAL_APP is not admitted and was preserved; quit vc-terminal, explicitly replace it with signed vc-terminal $version from $repository/releases, then retry Upgrade."
     return 1
   fi
   has_cmd curl || { warn "curl is required to download vc-terminal."; return 1; }
 
-  local work expected observed app signature shipped staged
+  local work expected observed app signature shipped staged stage_root
   work="$(mktemp -d "${TMPDIR:-/tmp}/vibecrafted-vc-terminal.XXXXXX")" || return 1
   if ! curl -fsSL --retry 3 "$base/$asset" -o "$work/$asset" \
     || ! curl -fsSL --retry 3 "$base/$asset.sha256" -o "$work/$asset.sha256"; then
@@ -862,7 +895,7 @@ install_vcterminal() {
     rm -rf "$work"
     return 1
   fi
-  mkdir -p "$work/stage"
+  mkdir -p "$work/stage" || { rm -rf "$work"; return 1; }
   app="$work/stage/vc-terminal.app"
   if ! ditto -x -k "$work/$asset" "$work/stage" 2>/dev/null || [[ ! -d "$app" || -L "$app" ]]; then
     warn "vc-terminal $asset carries no vc-terminal.app."
@@ -889,19 +922,40 @@ install_vcterminal() {
     return 1
   fi
 
-  # Copy beside the destination, then one rename into the empty name.
-  staged="$(dirname "$VCTERMINAL_APP")/.vc-terminal.app.installing.$$"
+  # Stage on the destination filesystem. A private directory prevents a stale
+  # PID-named copy from being merged into the new signed bundle by ditto.
+  stage_root="$(mktemp -d "$(dirname "$VCTERMINAL_APP")/.vc-terminal.install.XXXXXX")" || {
+    rm -rf "$work"
+    warn "Cannot stage vc-terminal in Applications; check permissions and retry Upgrade."
+    return 1
+  }
+  staged="$stage_root/vc-terminal.app"
   if ! ditto "$app" "$staged" 2>/dev/null; then
-    rm -rf "$staged" "$work"
+    rm -rf "$stage_root" "$work"
     warn "Cannot write $(dirname "$VCTERMINAL_APP"); open the vc-terminal $version DMG from $repository/releases and drag the app into Applications."
     return 1
   fi
   rm -rf "$work"
-  if [[ -e "$VCTERMINAL_APP" || -L "$VCTERMINAL_APP" ]] || ! mv "$staged" "$VCTERMINAL_APP"; then
-    rm -rf "$staged"
-    warn "$VCTERMINAL_APP appeared during the install; not replacing it."
+  # macOS RENAME_EXCL refuses an existing destination atomically, including
+  # an app created after the earlier existence check; mv could nest or replace.
+  if ! "$FOUNDATIONS_PYTHON" -I - "$staged" "$VCTERMINAL_APP" <<'PY'
+import ctypes
+import os
+import sys
+
+libc = ctypes.CDLL(None, use_errno=True)
+rename = libc.renamex_np
+rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+rename.restype = ctypes.c_int
+if rename(os.fsencode(sys.argv[1]), os.fsencode(sys.argv[2]), 0x00000004) != 0:
+    raise SystemExit(os.strerror(ctypes.get_errno()))
+PY
+  then
+    rm -rf "$stage_root"
+    warn "Cannot place $VCTERMINAL_APP without replacing an existing app; inspect Applications and retry Upgrade."
     return 1
   fi
+  rmdir "$stage_root" || true
   if ! probe="$(vcterminal_resolve)"; then
     warn "vc-terminal placed at $VCTERMINAL_APP, but the runtime does not admit it: $probe"
     return 1
@@ -1248,17 +1302,23 @@ if (( ${#TARGETS[@]} == 0 )); then
   fi
 fi
 
-printf '\n\033[1m  Foundation Installer\033[0m\n'
-printf '  ─────────────────────\n'
-printf '  Runtime bin:  %s\n' "$PREFIX"
-printf '  Launcher bin: %s\n\n' "$LAUNCHER_PREFIX"
+printf '\n\033[1m  Foundation Installer\033[0m\n' >&2
+printf '  ─────────────────────\n' >&2
+printf '  Runtime bin:  %s\n' "$PREFIX" >&2
+printf '  Launcher bin: %s\n\n' "$LAUNCHER_PREFIX" >&2
 
 # Product foundations are externally channeled; a missing binary fails the
-# install. REQUIRE_FOUNDATIONS=0 is the explicit, caller-owned waiver.
+# install. REQUIRE_FOUNDATIONS=0 waives only non-terminal/frame targets.
 foundation_channel_fail() {
   local name="$1"
   if (( CHECK_ONLY )); then
     warn "$name missing — --check reports only; a real install fails here."
+  elif [[ "$name" == "vc-frame" || "$name" == "vc-terminal" ]]; then
+    # S2 cannot be waived: the carrier must not publish without its products.
+    local detail="${FOUNDATION_LAST_WARNING:-Cannot provision $name; check filesystem permissions and the pinned release.}"
+    detail="${detail//$'\n'/ }"
+    printf '%s Resolve this refusal and retry Upgrade.\n' "$detail" >&2
+    exit 1
   elif [[ "$REQUIRE_FOUNDATIONS" == "0" ]]; then
     warn "$name unavailable — REQUIRE_FOUNDATIONS=0 waives the product spine for this run; install it from its channel later."
   else
@@ -1268,6 +1328,7 @@ foundation_channel_fail() {
 
 exit_code=0
 for target in "${TARGETS[@]}"; do
+  FOUNDATION_LAST_WARNING=""
   case "$target" in
     loctree)  install_loctree  || foundation_channel_fail loctree ;;
     aicx)     install_aicx     || foundation_channel_fail aicx ;;

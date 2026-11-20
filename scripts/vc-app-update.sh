@@ -527,7 +527,7 @@ write_terminal_receipt() {
     "$(escape_json "$EXPECTED_TEAM")" \
     "$(escape_json "$TRANSACTION")")"
   write_journal "receipt_written" "$detail"
-  if [[ "$MODE" == "replace" ]]; then
+  if [[ "$MODE" == "replace" && "$EXPECTED_IDENTIFIER" == "io.vetcoders.vibecrafted" ]]; then
     local registry="${VIBECRAFTED_HOME:-$HOME/.vibecrafted}/vibecrafted-product-update"
     assert_no_symlink_components "$registry"
     mkdir -p "$registry"
@@ -2052,8 +2052,8 @@ complete_replacement() {
   installer="$DESTINATION/Contents/Resources/runtime-pack/install-runtime-pack.sh"
   assert_no_symlink_components "$installer"
   [[ -x "$installer" ]] || { echo "replacement incomplete: bundled installer missing" >&2; return 20; }
-  # v2 runtime publication resolves independent products and reports missing
-  # prerequisites. The App transaction never stages or replaces those products.
+  # S1/S3: the installed carrier owns provisioning, admission and publication.
+  # Keep historical paired-helper handling in restore_prior_runtime only.
   without_update_lock_fd /bin/bash "$installer" --pack "$pack" --app-root "$DESTINATION" || return "$?"
 
 }
