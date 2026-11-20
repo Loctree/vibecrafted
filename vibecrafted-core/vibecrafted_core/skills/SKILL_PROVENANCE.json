@@ -1,6 +1,6 @@
 {
   "schema": "vibecrafted.skill-provenance.v3",
-  "generated_at": "2026-11-08",
+  "generated_at": "2026-11-20",
   "skills": {
     "vc-agents": {
       "sha256": [
@@ -2486,6 +2486,7 @@
         "611e578ffc4a3f1ab6a09d612b73a711080c5bd4ced3adbaea50d2dbf5d30275",
         "654567990725c68e8124a32677085ea24f483f80c28c5be45bccea6d2f6f43f0",
         "6d0c34ccba6d762aa2252ee2438d2333ae5e10428f228372fe69773796a31287",
+        "6d1b8eaab853348cc4198e47e96ba7871dc715ee3578f822934f723af81edc4a",
         "6da6f3619515174937b2bde692ff91ee3a0c756ba8432b7c9cfdf49af87eeb81",
         "7b8f2b29fc1d89e00d2306cf158f0be687121c73548565ea58863804c0bda55a",
         "8b868273914bd9bdb6dec005dddce9f2ac38aebb23afd84989b3fbde876920c9",
@@ -2518,6 +2519,7 @@
           "508853db6d39339ff6ca10d141b0612e97f3d36c",
           "577d7aaced65bbe9a59545458d7417483cfea9b3",
           "763173b61d9478a666e3dae8b8e39fbbab64e85b",
+          "8b5a28ee77e3830f617a75775bf7412724636e5e",
           "92e5df997224051a8cb6f1841781ae30d0eb5d90",
           "bb8707b79ce39e472237de9b2ef8e9d8b347a3b5",
           "d49b80afa10440b5e8725ce43b49d80cb2b97f16"
@@ -2539,6 +2541,7 @@
           "5f6219fc96b1c9d93bbd6d7dc9cd82caf1fa0d3c",
           "615f727ae35f872c0d16efe92d201d9c38e46191",
           "7fae7042202cac7b9e259b53519e0da651a40920",
+          "85fe7ff10d253099893b00cb48d1c85c86e407d2",
           "8c40e88c5afd745a2e3d3ec434335ccc92b966d5",
           "8dde4d0b4b90c545e56d75d7b4c4d040cdbe7a5a",
           "90e4c55cd8f4f6dfa2ceccfc0ed90291eb29d36c",
@@ -2598,6 +2601,7 @@
         "references/confrontation-brief.md": [
           "0f903c853fb585b5a0adbf6e56f3e2d3202f505f",
           "13b47fa709da16a8139cff0cddc4c5f7155bbca4",
+          "5f9c13a686c3e33aa7736a295eb0eb93ca6ac2d4",
           "833eeb0d80703c35d9ded98f93f222981a6df217",
           "e07e710a33bd4c772a928f35eac521c74d761e67",
           "fe2a21f11d981ba768d3d4ca32b6014f84ca1885"
@@ -2614,6 +2618,7 @@
         "references/extraction-brief.md": [
           "96571f29ba82ec8d2f8e6473e5af9c6436b9ca58",
           "a56eeb9d4b48e84daf1078cd872a2e29cd20729e",
+          "dffab2c0abc120106ba2d196b72c0e8535cfe51b",
           "e044c1382e932a23b59d66cebb81d15bdb0af60d",
           "fb2f6218dc0b6ee2a2fd91914535f3d1bba71d9c"
         ],
