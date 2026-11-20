@@ -170,6 +170,10 @@ import sys
 from pathlib import Path
 
 args = sys.argv[1:]
+# The external product resolver admits Frame by its version line.
+if args == ["--version"]:
+    print("vc-frame 4.6.0")
+    raise SystemExit(0)
 capture = Path(os.environ["CAPTURE_FILE"])
 state_file = Path(os.environ["SESSION_STATE_FILE"])
 name_file = state_file.with_suffix(".name")

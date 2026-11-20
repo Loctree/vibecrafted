@@ -636,7 +636,11 @@ def test_recovery_session_name_fits_macos_default_socket_budget() -> None:
     assert re.search(r"-r[0-9]{6}-[0-9]+$", name) is None
 
 
-def test_recovery_session_name_keeps_the_place_label() -> None:
+def test_recovery_session_name_keeps_the_place_label(tmp_path: Path) -> None:
+    # The catalogue place comes from the project directory, not the checkout
+    # name; a release worktree must not decide the expected label.
+    place = tmp_path / "vibecrafted"
+    place.mkdir()
     result = subprocess.run(
         [
             "bash",
@@ -646,7 +650,7 @@ def test_recovery_session_name_keeps_the_place_label() -> None:
                 '_vetcoders_recovery_vc_frame_session_name "vibecrafted"'
             ),
         ],
-        cwd=REPO_ROOT,
+        cwd=place,
         env={**os.environ, "VIBECRAFTED_ROOT": str(REPO_ROOT)},
         capture_output=True,
         text=True,

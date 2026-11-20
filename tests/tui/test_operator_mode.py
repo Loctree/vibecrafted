@@ -397,6 +397,8 @@ def test_compiled_vc_start_enters_lobby_through_bundled_shell(tmp_path: Path) ->
         host_bin / "git",
         f"#!/bin/bash\nprintf '%s\\n' \"$PWD: $*\" >> {shlex.quote(str(git_probe))}\nexit 71\n",
     )
+    # Frame is an external product on PATH, never the generation's own copy.
+    _write_stateful_vc_frame(host_bin, capture_file, session_state_file)
     env = os.environ.copy()
     env.update(
         HOME=str(home),
@@ -1098,8 +1100,11 @@ def test_vc_init_finds_bundled_vc_frame_and_creates_missing_operator_session(
         assert "--new-session-with-layout" in payload
         assert f"--session {expected_session} --new-session-with-layout" not in payload
         assert f"--session {expected_session} action new-pane --floating" in payload
+        # The tab carries the repository identity; in a worktree it differs
+        # from the checkout directory that names the session.
+        repo_tab = _org_repo().split("/")[1]
         assert (
-            f"run_id=interactive target={expected_session}/{REPO_ROOT.name} · claude · unknown"
+            f"run_id=interactive target={expected_session}/{repo_tab} · claude · unknown"
             in result.stdout
         )
         assert f"watch=vc-frame attach {expected_session}" in result.stdout
