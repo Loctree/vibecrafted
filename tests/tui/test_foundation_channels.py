@@ -14,9 +14,11 @@ import hashlib
 import json
 import os
 import platform
+import plistlib
 import subprocess
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -497,11 +499,15 @@ def test_prview_never_overwrites_another_install_in_the_launcher_bin(
 # --- vc-frame from its own GitHub release ---------------------------------------
 
 
-def _pinned_frame_version() -> str:
+def _pinned_version(component: str) -> str:
     components = json.loads(
         (REPO_ROOT / "config/source-components.json").read_text(encoding="utf-8")
     )
-    return components["components"]["vc-frame"]["version"]
+    return components["components"][component]["version"]
+
+
+def _pinned_frame_version() -> str:
+    return _pinned_version("vc-frame")
 
 
 def _vcframe_release(
@@ -672,6 +678,140 @@ def test_check_mode_names_the_pinned_vc_frame_release(tmp_path: Path) -> None:
             f"Would install vc-frame {_pinned_frame_version()} from "
             f"file://{tmp_path / 'frame-release'}/vc-frame-{target}.tar.gz" in output
         )
+
+
+# --- vc-terminal from its own GitHub release (macOS) ----------------------------
+
+TERMINAL_ASSET = "vc-terminal-aarch64-apple-darwin.zip"
+
+
+def _terminal_state() -> str:
+    """How this host's fixed /Applications/vc-terminal.app answers the resolver.
+
+    The terminal path is a fixed admission constant with no test override, so
+    the installer's branch depends on the machine running the test.
+    """
+    if platform.system() != "Darwin":
+        return "not-macos"
+    if platform.machine() != "arm64":
+        return "unpublished-host"
+    resolved = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(REPO_ROOT / "vibecrafted-core/vibecrafted_core/external_products.py"),
+            "terminal",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if resolved.returncode == 0:
+        return "admitted"
+    return "occupied" if Path("/Applications/vc-terminal.app").exists() else "absent"
+
+
+def _vcterminal_release(tmp_path: Path, *, checksum: str | None = None) -> None:
+    """A file:// release directory with an unsigned app in the installer's ZIP."""
+    release = tmp_path / "terminal-release"
+    release.mkdir()
+    asset = release / TERMINAL_ASSET
+    info = plistlib.dumps(
+        {
+            "CFBundleIdentifier": "io.vetcoders.vc-terminal",
+            "CFBundleShortVersionString": _pinned_version("vc-terminal"),
+        }
+    )
+    with zipfile.ZipFile(asset, "w") as archive:
+        archive.writestr("vc-terminal.app/Contents/Info.plist", info)
+        archive.writestr(
+            "vc-terminal.app/Contents/MacOS/vc-terminal", "#!/bin/sh\nexit 0\n"
+        )
+    digest = checksum or hashlib.sha256(asset.read_bytes()).hexdigest()
+    (release / f"{TERMINAL_ASSET}.sha256").write_text(
+        f"{digest}  {TERMINAL_ASSET}\n", encoding="utf-8"
+    )
+
+
+def _run_terminal_installer(
+    tmp_path: Path, *args: str, **extra: str
+) -> subprocess.CompletedProcess[str]:
+    return _run_installer(
+        tmp_path,
+        *args,
+        "vc-terminal",
+        path=[tmp_path / "bin"],
+        VCTERMINAL_RELEASE_BASE=f"file://{tmp_path / 'terminal-release'}",
+        **extra,
+    )
+
+
+def _assert_terminal_branch(
+    result: subprocess.CompletedProcess[str], state: str, absent_message: str
+) -> None:
+    output = result.stdout + result.stderr
+    if state == "not-macos":
+        assert result.returncode == 0, output
+        assert "vc-terminal is a macOS app; nothing to install" in output
+    elif state == "admitted":
+        assert "vc-terminal already installed" in output
+    elif state == "unpublished-host":
+        assert "vc-terminal publishes no build for macOS/" in output
+    elif state == "occupied":
+        assert "is another install; not replacing it" in output
+    else:
+        assert result.returncode == 1, output
+        assert absent_message in output
+        assert "required foundation failed: vc-terminal" in result.stderr
+        assert not Path("/Applications/vc-terminal.app").exists()
+
+
+def test_a_vc_terminal_asset_that_misses_its_sha256_is_refused(tmp_path: Path) -> None:
+    _vcterminal_release(tmp_path, checksum="0" * 64)
+
+    result = _run_terminal_installer(tmp_path)
+
+    _assert_terminal_branch(
+        result, _terminal_state(), "does not match its release .sha256"
+    )
+
+
+def test_a_matching_vc_terminal_asset_still_needs_the_publishers_signature(
+    tmp_path: Path,
+) -> None:
+    _vcterminal_release(tmp_path)
+
+    result = _run_terminal_installer(tmp_path)
+
+    _assert_terminal_branch(
+        result,
+        _terminal_state(),
+        "is not io.vetcoders.vc-terminal signed by Developer ID team MW223P3NPX",
+    )
+
+
+def test_the_default_macos_run_includes_vc_terminal(tmp_path: Path) -> None:
+    _vcterminal_release(tmp_path)
+
+    result = _run_installer(
+        tmp_path,
+        "--check",
+        path=[tmp_path / "bin"],
+        VCTERMINAL_RELEASE_BASE=f"file://{tmp_path / 'terminal-release'}",
+    )
+    output = result.stdout + result.stderr
+    state = _terminal_state()
+
+    assert not Path(str(tmp_path / "home/Applications")).exists()
+    if state == "not-macos":
+        assert "vc-terminal" not in output
+    elif state == "absent":
+        assert (
+            f"Would install vc-terminal {_pinned_version('vc-terminal')} from "
+            f"file://{tmp_path / 'terminal-release'}/{TERMINAL_ASSET}" in output
+        )
+    elif state == "admitted":
+        assert "vc-terminal already installed" in output
 
 
 # --- screenscribe from PyPI through pipx ---------------------------------------

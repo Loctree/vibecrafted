@@ -9,6 +9,8 @@ set -euo pipefail
 #   aicx / aicx-mcp       — npm: @loctree/aicx
 #   vc-frame               — GitHub releases: Loctree/vc-frame, the release this runtime pins
 #                            in config/source-components.json (.sha256 + Developer ID verified)
+#   vc-terminal (macOS)    — GitHub releases: Loctree/vc-terminal, pinned the same way; the
+#                            stapled app is placed only when /Applications has none
 #   prview                 — GitHub releases: vetcoders/prview-rs (SHA256SUMS-verified)
 #   screenscribe           — PyPI: screenscribe, installed through uv or pipx
 #
@@ -790,6 +792,123 @@ install_vcframe() {
   vcframe_cockpit_or_hint
 }
 
+# ---------------------------------------------------------------------------
+# vc-terminal — independent macOS app, installed from its own GitHub release
+#
+# The release carries the DMG for people and, for this installer, the stapled
+# app as vc-terminal-<target>.zip + .sha256 (no disk image to mount). Only a
+# missing /Applications/vc-terminal.app is placed here: replacing an app that
+# exists, possibly running, is never a foundations run's decision.
+# ---------------------------------------------------------------------------
+
+VCTERMINAL_APP="/Applications/vc-terminal.app"
+
+# Prints the admitted terminal on success, the resolver's refusal otherwise.
+vcterminal_resolve() {
+  [[ -n "$FOUNDATIONS_PYTHON" ]] || { echo "python3 is required to resolve vc-terminal"; return 1; }
+  "$FOUNDATIONS_PYTHON" -I "$EXTERNAL_PRODUCTS" terminal 2>&1
+}
+
+install_vcterminal() {
+  if [[ "$(detect_os)" != "macos" ]]; then
+    info "vc-terminal is a macOS app; nothing to install on $(detect_os)."
+    return 0
+  fi
+  local probe pin repository version base target asset
+  if probe="$(vcterminal_resolve)"; then
+    ok "vc-terminal already installed: $probe"
+    return 0
+  fi
+  if ! pin="$(source_component vc-terminal)" || [[ "$pin" != *" "* ]]; then
+    warn "This runtime pins no vc-terminal release in $SOURCE_COMPONENTS."
+    return 1
+  fi
+  repository="${pin% *}"
+  version="${pin##* }"
+  base="${VCTERMINAL_RELEASE_BASE:-$repository/releases/download/v$version}"
+  case "$(detect_arch)" in
+    aarch64) target="aarch64-apple-darwin" ;;
+    *)
+      warn "vc-terminal publishes no build for macOS/$(detect_arch) ($repository)."
+      return 1
+      ;;
+  esac
+  asset="vc-terminal-${target}.zip"
+
+  if (( CHECK_ONLY )); then
+    info "vc-terminal: $probe"
+    info "Would install vc-terminal $version from $base/$asset -> $VCTERMINAL_APP"
+    return 0
+  fi
+  if [[ -e "$VCTERMINAL_APP" || -L "$VCTERMINAL_APP" ]]; then
+    warn "vc-terminal: $probe"
+    warn "$VCTERMINAL_APP is another install; not replacing it. Quit it and install vc-terminal $version from $repository/releases."
+    return 1
+  fi
+  has_cmd curl || { warn "curl is required to download vc-terminal."; return 1; }
+
+  local work expected observed app signature shipped staged
+  work="$(mktemp -d "${TMPDIR:-/tmp}/vibecrafted-vc-terminal.XXXXXX")" || return 1
+  if ! curl -fsSL --retry 3 "$base/$asset" -o "$work/$asset" \
+    || ! curl -fsSL --retry 3 "$base/$asset.sha256" -o "$work/$asset.sha256"; then
+    warn "Could not download $asset (+ .sha256) from $base."
+    rm -rf "$work"
+    return 1
+  fi
+  expected="$(awk -v asset="$asset" '$2 == asset || $2 == "*" asset {print $1}' "$work/$asset.sha256")"
+  observed="$(sha256_of "$work/$asset")"
+  if [[ -z "$expected" || "$expected" != "$observed" ]]; then
+    warn "vc-terminal $asset does not match its release .sha256; refusing to install it."
+    rm -rf "$work"
+    return 1
+  fi
+  mkdir -p "$work/stage"
+  app="$work/stage/vc-terminal.app"
+  if ! ditto -x -k "$work/$asset" "$work/stage" 2>/dev/null || [[ ! -d "$app" || -L "$app" ]]; then
+    warn "vc-terminal $asset carries no vc-terminal.app."
+    rm -rf "$work"
+    return 1
+  fi
+  signature="$(codesign -dv "$app" 2>&1 || true)"
+  if ! codesign --verify --deep --strict "$app" >/dev/null 2>&1 \
+    || ! grep -qx "TeamIdentifier=$PUBLISHER_MACOS_TEAM_ID" <<<"$signature" \
+    || ! grep -qx "Identifier=io.vetcoders.vc-terminal" <<<"$signature"; then
+    warn "vc-terminal $asset is not io.vetcoders.vc-terminal signed by Developer ID team $PUBLISHER_MACOS_TEAM_ID; refusing to install it."
+    rm -rf "$work"
+    return 1
+  fi
+  if ! spctl --assess --type execute "$app" >/dev/null 2>&1; then
+    warn "Gatekeeper does not accept vc-terminal $asset (not notarized); refusing to install it."
+    rm -rf "$work"
+    return 1
+  fi
+  shipped="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null || true)"
+  if [[ "$shipped" != "$version" ]]; then
+    warn "vc-terminal $asset carries version '${shipped:-unknown}', not the pinned $version; refusing to install it."
+    rm -rf "$work"
+    return 1
+  fi
+
+  # Copy beside the destination, then one rename into the empty name.
+  staged="$(dirname "$VCTERMINAL_APP")/.vc-terminal.app.installing.$$"
+  if ! ditto "$app" "$staged" 2>/dev/null; then
+    rm -rf "$staged" "$work"
+    warn "Cannot write $(dirname "$VCTERMINAL_APP"); open the vc-terminal $version DMG from $repository/releases and drag the app into Applications."
+    return 1
+  fi
+  rm -rf "$work"
+  if [[ -e "$VCTERMINAL_APP" || -L "$VCTERMINAL_APP" ]] || ! mv "$staged" "$VCTERMINAL_APP"; then
+    rm -rf "$staged"
+    warn "$VCTERMINAL_APP appeared during the install; not replacing it."
+    return 1
+  fi
+  if ! probe="$(vcterminal_resolve)"; then
+    warn "vc-terminal placed at $VCTERMINAL_APP, but the runtime does not admit it: $probe"
+    return 1
+  fi
+  ok "Installed vc-terminal $version from $base/$asset: $VCTERMINAL_APP"
+}
+
 
 # ---------------------------------------------------------------------------
 # Agent CLI installer
@@ -1078,6 +1197,7 @@ Targets:
   loctree         Install loctree + loctree-mcp from npm when missing
   aicx            Install aicx / aicx-mcp from npm when missing
   vc-frame        Install vc-frame from its pinned GitHub release when missing, then check the cockpit
+  vc-terminal     Place vc-terminal.app from its pinned GitHub release when missing (macOS)
   prview          Install prview from its GitHub release when missing
   screenscribe    Install screenscribe from PyPI through uv (fetched when missing) or pipx
   sandbox         Optional microsandbox/libkrun runtime
@@ -1101,6 +1221,7 @@ while [[ $# -gt 0 ]]; do
     loctree)     TARGETS+=("loctree") ;;
     aicx)        TARGETS+=("aicx") ;;
     vc-frame)    TARGETS+=("vc-frame") ;;
+    vc-terminal) TARGETS+=("vc-terminal") ;;
     agents)      TARGETS+=("agents"); AGENTS_REQUIRED=1 ;;
     prview)      TARGETS+=("prview") ;;
     screenscribe) TARGETS+=("screenscribe") ;;
@@ -1119,11 +1240,11 @@ if (( ${#TARGETS[@]} == 0 )); then
   if (( INSTALL_ALL )); then
     TARGETS+=("prview" "sandbox")
   fi
-  # macOS users always get the optional iTerm2 plugin prompt; the
-  # install function itself is a no-op on Linux/Windows and in
-  # non-interactive shells.
+  # On macOS the runtime opens its sessions in vc-terminal.app, and users
+  # always get the optional iTerm2 plugin prompt; that install function is a
+  # no-op in non-interactive shells.
   if [[ "$(detect_os)" == "macos" ]]; then
-    TARGETS+=("iterm2-plugin")
+    TARGETS+=("vc-terminal" "iterm2-plugin")
   fi
 fi
 
@@ -1151,6 +1272,7 @@ for target in "${TARGETS[@]}"; do
     loctree)  install_loctree  || foundation_channel_fail loctree ;;
     aicx)     install_aicx     || foundation_channel_fail aicx ;;
     vc-frame) install_vcframe  || foundation_channel_fail vc-frame ;;
+    vc-terminal) install_vcterminal || foundation_channel_fail vc-terminal ;;
     agents)
       if ! install_agents; then
         if (( AGENTS_REQUIRED )); then
