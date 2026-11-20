@@ -19,10 +19,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   below 5.0.0) already on your PATH is kept, and an installation the
   installer does not own is never overwritten. A vc-frame that cannot be
   installed now fails the install, like Loctree and AICX.
-- Install [vc-terminal](https://github.com/Loctree/vc-terminal/releases)
-  0.18.0 or newer in `/Applications/vc-terminal.app`. The runtime checks
-  product identity and compatibility and reports an install hint when a
-  dependency is missing.
+- On macOS the installer places [vc-terminal](https://github.com/Loctree/vc-terminal/releases)
+  0.18.0 in `/Applications/vc-terminal.app` from the release this runtime
+  pins (Apple silicon), after checking the release `.sha256`, the Developer
+  ID signature, Gatekeeper and the bundle version. It only fills an empty
+  `/Applications/vc-terminal.app`; an existing app is never replaced, and an
+  older one that the runtime does not admit is reported for you to replace.
+  The runtime checks product identity and compatibility and reports an
+  install hint when a dependency is missing.
 
 - The terminal font chooser offers a curated set only: the five Monaspace NF
   families, then Anonymous Pro. Other fixed-width fonts installed on the Mac are
