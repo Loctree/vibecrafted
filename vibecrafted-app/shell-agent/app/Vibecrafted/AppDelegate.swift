@@ -173,6 +173,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
   private var runtimeResolveFailures = 0
   /// Why there is no usable runtime, rendered where the generation would be.
   private var runtimeResolutionFailure: String?
+  /// The installed generation when it is an older release than this App's
+  /// carrier. Set only by `applyResolution`; while it is set the remedy is the
+  /// carrier installer's upgrade, never a verdict from that older generation.
+  private var outdatedRuntimeGeneration: String?
+  /// The application-menu upgrade action, shown only while an upgrade is owed.
+  private var upgradeMenuItem: NSMenuItem?
   /// A non-fatal note about the shared service, rendered under the runtime line.
   private var runtimeAdvisory: String?
   /// The owner's last word on configuration, for the diagnostics surface.
@@ -453,6 +459,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
         return
       }
       self.finishConnectingCommandDeck(with: resolution)
+      // This App is newer than what is installed. The older generation is not
+      // asked anything; the Founder is offered the upgrade the carrier
+      // installer performs, once per launch.
+      if case .outdated = resolution {
+        self.offerRuntimePackReinstall(configuration: "", startup: true)
+      }
     }
   }
 
@@ -537,16 +549,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
 
   /// Ask the configuration owner: the installed generation's own installer.
   ///
-  /// Never this App's carrier copy. The generation that is running is the one
-  /// entitled to say what its configuration should be, which is also what lets
-  /// a repair work on an installation newer than this bundle.
+  /// The generation that is running is the one entitled to say what its
+  /// configuration should be, which is also what lets a repair work on an
+  /// installation newer than this bundle. The one exception is a generation
+  /// older than this App's carrier: it is never executed, because its rules
+  /// predate the App it would be judging, and its remedy is the upgrade.
   private func runConfigRepair(
     plan: Bool, completion: @escaping (ConfigRepairOutcome) -> Void
   ) {
     let runtimeHome = currentRuntimeHome()
-    switch runtimeResolverBootstrap(runtimeHome: runtimeHome, probe: .live) {
+    let carrier = carrierGeneration()
+    switch runtimeResolverBootstrap(
+      runtimeHome: runtimeHome, carrierGeneration: carrier, probe: .live)
+    {
     case .absent(let reason): completion(.absent(reason))
     case .unusable(let reason): completion(.unusable(reason))
+    case .outdated(let installed):
+      completion(.unusable(runtimeOutdatedReason(installed: installed, carrier: carrier)))
     case .ask(let python, let installer):
       let process = Process()
       process.executableURL = python
@@ -790,6 +809,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
         self.reportWorkspaceLaunchFailure(
           "The installed Vibecrafted runtime cannot be used: \(reason). "
             + "Use Repair Runtime… to repair it.")
+      case .outdated(let installed):
+        // The installation is older than this App. Opening is still not
+        // installing: the upgrade stays the Founder's choice, and the reason
+        // names the action that performs it.
+        self.terminalLaunchInFlight = false
+        self.applyResolution(resolution)
+        self.renderServerStatus()
+        self.reportWorkspaceLaunchFailure(
+          runtimeOutdatedReason(installed: installed, carrier: self.carrierGeneration()))
       }
     }
   }
@@ -1039,6 +1067,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
       homeDirectory: host["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path)
   }
 
+  /// The generation this App carries — the same label the update identity
+  /// reports, so there is one reader of carrier identity.
+  private func carrierGeneration() -> String {
+    currentProductUpdateIdentity().appGeneration
+  }
+
+  /// The generation the active pointer names, read without executing anything
+  /// from it. Nil when the pointer cannot be trusted to name one.
+  private func activeRuntimeGenerationLabel() -> String? {
+    guard
+      case .named(let root) = activeRuntimeGeneration(
+        runtimeHome: currentRuntimeHome(), probe: .live)
+    else { return nil }
+    return root.lastPathComponent
+  }
+
   /// Ask the owner what is installed.
   ///
   /// Coalesced and cached: callers that arrive while a resolve is in flight
@@ -1106,7 +1150,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
     fingerprint: RuntimeIdentityFingerprint,
     attempt: Int
   ) {
-    switch runtimeResolverBootstrap(runtimeHome: runtimeHome, probe: .live) {
+    switch runtimeResolverBootstrap(
+      runtimeHome: runtimeHome, carrierGeneration: carrierGeneration(), probe: .live)
+    {
+    case .outdated(let installed):
+      // Nothing of the older generation runs: no interpreter, no resolver.
+      let resolution: RuntimeContract = .outdated(installed)
+      cacheResolution(resolution, fingerprint: fingerprint)
+      deliverResolution(resolution)
     case .absent(let reason):
       let resolution: RuntimeContract = .absent(reason)
       cacheResolution(resolution, fingerprint: fingerprint)
@@ -1204,7 +1255,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
     if cachedResolution?.fingerprint != fingerprint { runtimeResolveFailures = 0 }
     switch resolution {
     case .unusable: runtimeResolveFailures = min(5, runtimeResolveFailures + 1)
-    case .ready, .absent: runtimeResolveFailures = 0
+    case .ready, .absent, .outdated: runtimeResolveFailures = 0
     }
     cachedResolution = RuntimeResolutionCache(fingerprint: fingerprint, value: resolution,
       expires: ProcessInfo.processInfo.systemUptime
@@ -1253,16 +1304,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
       canonicalInstall = install
       canonicalRuntimeEnvironment = composeRuntimeEnvironment(install: install)
       runtimeResolutionFailure = nil
+      outdatedRuntimeGeneration = nil
       if changed {
         model.refreshEndpoint(caretakerData: nil, runtimeReady: true)
         lifecycleLog("adopted active generation at \(install.root.path)")
       }
       return install
     case .absent(let reason):
+      outdatedRuntimeGeneration = nil
       discardRuntimeTruth(failure: nil, log: "no installed runtime (\(reason))")
       return nil
     case .unusable(let reason):
+      outdatedRuntimeGeneration = nil
       discardRuntimeTruth(failure: reason, log: "runtime inspection refused: \(reason)")
+      return nil
+    case .outdated(let installed):
+      outdatedRuntimeGeneration = installed
+      discardRuntimeTruth(
+        failure: runtimeOutdatedReason(installed: installed, carrier: carrierGeneration()),
+        log: "installed generation \(installed) is older than this App's carrier; "
+          + "its installer is not asked")
       return nil
     }
   }
@@ -1605,15 +1666,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
       throw PreferenceConflictError(envelope: envelope)
     }
     guard clean, terminationStatus == 0 else {
-      // The installer is a Python program and prints a traceback when it
-      // refuses. Reducing it to the owner's actual message is what keeps a
-      // stack of interpreter frames out of a normal repair dialog.
+      // A refusal ends with one human sentence on stderr, and that sentence is
+      // shown exactly as the installer wrote it — it is the admission owner's
+      // verdict, not material for this App to rephrase. Only a run that never
+      // reached a verdict (killed, timed out, or silent) is described here,
+      // with interpreter frames reduced to the owner's actual message.
       let diagnostic = boundedResolverDiagnostic(
         stdout: stdout, stderr: stderr, limit: 480)
-      let detail =
-        timedOut
-        ? "the Runtime Pack installer timed out; its durable transaction will recover or report its lease state\(diagnostic)"
-        : "the Runtime Pack installer exited \(terminationStatus)\(diagnostic)"
+      let detail: String
+      if timedOut {
+        detail = "the Runtime Pack installer timed out; its durable transaction will recover or report its lease state\(diagnostic)"
+      } else if clean, let refusal = installerRefusalLine(stderr: stderr) {
+        detail = refusal
+      } else {
+        detail = "the Runtime Pack installer exited \(terminationStatus)\(diagnostic)"
+      }
       throw NSError(
         domain: "io.vetcoders.vibecrafted.install",
         code: Int(terminationStatus),
@@ -1838,7 +1905,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
   /// to call from any completion handler.
   private func renderServerStatus() {
     if canonicalInstall == nil, let reason = runtimeResolutionFailure {
-      model.block(reason: "Runtime inspection unavailable: \(reason). VC Server availability is unknown; inspection will retry automatically.")
+      // An owed upgrade is not a failed inspection and will not fix itself.
+      model.block(reason: outdatedRuntimeGeneration != nil ? reason
+        : "Runtime inspection unavailable: \(reason). VC Server availability is unknown; inspection will retry automatically.")
     } else {
       model.refreshEndpoint(caretakerData: lastCaretakerData, runtimeReady: canonicalInstall != nil)
     }
@@ -1862,10 +1931,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
     if state.canStop && runtimeActionPreflight == nil { actions.insert(.requestStopRuntime) }
     model.availableActions = actions
     let presentation = model.presentation
+    let carrier = carrierGeneration()
     let runtimePack = deriveRuntimePackMenuState(
       generation: canonicalInstall?.root.lastPathComponent,
       signedSourceRevision: signedCarrierRevisions?.source,
-      runtimeReady: canonicalInstall != nil)
+      runtimeReady: canonicalInstall != nil,
+      outdatedGeneration: outdatedRuntimeGeneration,
+      carrierGeneration: carrier)
+    upgradeMenuItem?.title = "Upgrade to Vibecrafted \(runtimeGenerationVersion(carrier))…"
+    upgradeMenuItem?.isHidden = outdatedRuntimeGeneration == nil
     let detail: String
     switch model.state {
     case .blocked(let reason), .recovering(let reason): detail = runtimeResolutionFailure ?? reason
@@ -1877,8 +1951,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
     case .connecting: statusLine = "Status: Connecting…"
     case .online: statusLine = "Status: Ready"
     case .recovering: statusLine = "Status: Recovering…"
-    case .blocked: statusLine = runtimeResolutionFailure == nil
-      ? "Status: Unavailable" : "Status: Runtime inspection unavailable"
+    case .blocked:
+      if outdatedRuntimeGeneration != nil {
+        statusLine = "Status: Upgrade available"
+      } else {
+        statusLine = runtimeResolutionFailure == nil
+          ? "Status: Unavailable" : "Status: Runtime inspection unavailable"
+      }
     }
     var utilities: Set<StatusItemAction> = []
     if canonicalInstall != nil {
@@ -1953,6 +2032,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
   @objc private func repairRuntime() {
     guard !repairInFlight, runtimeActionPreflight == nil, serverActionInFlight == nil
     else { return }
+    // An installation older than this App is not inspected by its own
+    // installer: for it, repair *is* the upgrade from this App's carrier.
+    if case .outdated = runtimeResolverBootstrap(
+      runtimeHome: currentRuntimeHome(), carrierGeneration: carrierGeneration(), probe: .live)
+    {
+      offerRuntimePackReinstall(configuration: "")
+      return
+    }
     repairInFlight = true
     updateDeckPresentation()
     runConfigRepair(plan: true) { [weak self] outcome in
@@ -2020,6 +2107,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
 
   @objc private func republishRuntimeAnyway() {
     offerRuntimePackReinstall(configuration: "Explicit republish requested from the App menu.", explicitRepublish: true)
+  }
+
+  /// The application-menu upgrade action. Visible only while the installed
+  /// generation is older than this App; the offer itself re-reads that state.
+  @objc private func upgradeRuntimeFromCarrier() {
+    offerRuntimePackReinstall(configuration: "")
   }
 
   @objc private func showRuntimeAbout() {
@@ -2201,18 +2294,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
     else { return }
     let identity = currentProductUpdateIdentity()
     let presentationResolution: RuntimeResolution<String>
-    let canUpgrade: Bool
+    // Only an installation the owner could not describe needs the pointer's
+    // own label: it is what tells Repair (same generation) from a refusal.
+    var activeGeneration: String?
     switch resolution {
     case .ready(let install):
-      let installed = install.root.lastPathComponent
-      presentationResolution = .ready(installed)
-      canUpgrade = shouldOfferRuntimeUpgrade(installed: installed, carrier: identity.appGeneration)
+      presentationResolution = .ready(install.root.lastPathComponent)
     case .absent(let reason):
       presentationResolution = .absent(reason)
-      canUpgrade = false
     case .unusable(let reason):
       presentationResolution = .unusable(reason)
-      canUpgrade = false
+      activeGeneration = activeRuntimeGenerationLabel()
+    case .outdated(let installed):
+      presentationResolution = .outdated(installed)
     }
     if startup {
       // The forced resolver may have observed a different generation since
@@ -2226,7 +2320,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
     let presentation = runtimeReinstallPresentation(
       resolution: presentationResolution, carrierGeneration: identity.appGeneration,
       configuration: configuration, serviceFailure: serviceFailure,
-      canUpgrade: canUpgrade, explicitRepublish: explicitRepublish)
+      activeGeneration: activeGeneration, explicitRepublish: explicitRepublish)
     let confirmation = NSAlert()
     confirmation.alertStyle = .warning
     confirmation.messageText = presentation.title
@@ -2252,9 +2346,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
           self.presentPreferenceConflict(conflict.envelope)
           return
         }
+        // The installer's own last line, verbatim. A refused publication
+        // touched no prior runtime, so nothing this App holds is changed here.
         let failure = NSAlert()
         failure.alertStyle = .critical
-        failure.messageText = "Vibecrafted could not reinstall its runtime"
+        failure.messageText = presentation.failureTitle
         failure.informativeText = error.localizedDescription
         failure.addButton(withTitle: "OK")
         failure.runModal()
@@ -3367,6 +3463,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
       action: #selector(showRuntimeAbout), keyEquivalent: "")
     let republish = appMenu.addItem(withTitle: "Republish anyway…", action: #selector(republishRuntimeAnyway), keyEquivalent: "")
     republish.target = self
+    // Hidden until the installed generation is older than this App;
+    // `updateDeckPresentation` names the version and reveals it.
+    let upgrade = appMenu.addItem(
+      withTitle: "Upgrade Vibecrafted…", action: #selector(upgradeRuntimeFromCarrier),
+      keyEquivalent: "")
+    upgrade.target = self
+    upgrade.isHidden = true
+    upgradeMenuItem = upgrade
     let checkUpdates = appMenu.addItem(
       withTitle: "Check for Updates…", action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
     checkUpdates.target = self
