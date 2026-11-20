@@ -25750,7 +25750,18 @@ def _restore_receipt_collision_backup(
     if not _receipt_backup_path_is_allowed(backup, runtime_home / ".installer-backups"):
         raise RuntimeError(f"receipt backup path escapes backup root: {backup}")
     if _path_present(backup):
-        _restore_path_from_backup(backup, stale)
+        if backup.is_dir() and not backup.is_symlink():
+            raise RuntimeInstallRefusal(
+                f"Launcher backup is a directory; inspect {backup} before retrying."
+            )
+        # Stage on the destination filesystem, then rename over the old name.
+        # Readers see either complete launcher, never an unlink/copy gap.
+        with tempfile.TemporaryDirectory(
+            prefix=".launcher-restore-", dir=stale.parent
+        ) as raw:
+            staged = Path(raw) / stale.name
+            _copy_path_to_backup(backup, staged)
+            os.replace(staged, stale)
         # Keep the source snapshot: a crash may precede the receipt checkpoint.
 
 
@@ -25761,12 +25772,13 @@ def _reclaim_foreign_launcher_names(
     runtime_home: Path,
     receipt: dict[str, Any],
     previous: Mapping[str, Any],
+    admitted_frame: Path | None = None,
 ) -> list[Path]:
     """Retire launchers a previous generation published but this one no longer
     publishes — legacy bare shims and `vibecrafted-<tool>` wrappers alike.
 
     Receipt-gated: only paths the previous receipt owns are considered. A
-    byte-identical file is removed and its collision backup (if any) restored,
+    byte-identical file is atomically replaced by its collision backup (if any),
     so the pre-Vibecrafted owner of a public name resurfaces. A bare foreign
     name whose bytes moved on is left untouched — that is the user's own
     install now (canonical releases land there), and its stale ownership and
@@ -25787,6 +25799,40 @@ def _reclaim_foreign_launcher_names(
         if stale.parent != launcher_home or stale.name in published:
             continue
         backup_raw = receipt.setdefault("backups", {}).get(stale_key)
+        if stale.name == "vc-frame" and sys.platform == "darwin":
+            if admitted_frame is None:
+                # Reclamation is never authority to remove an unprovisioned frame.
+                continue
+            owned = (
+                not stale.is_symlink()
+                and stale.is_file()
+                and previous_owned.get(stale_key) == _sha256_path(stale)
+            ) or (
+                stale.is_symlink()
+                and stale_key in previous_links
+                and _symlink_target(stale)
+                == Path(previous_links[stale_key]).resolve(strict=False)
+            )
+            if owned or not _path_present(stale):
+                with tempfile.TemporaryDirectory(
+                    prefix=".frame-handoff-", dir=launcher_home
+                ) as raw:
+                    staged = Path(raw) / "vc-frame"
+                    staged.symlink_to(admitted_frame)
+                    os.replace(staged, stale)
+            # In particular, keep Band C's newly managed link. Its ownership
+            # and any old collision backup must not be reclaimed on uninstall.
+            receipt.setdefault("owned_files", {}).pop(stale_key, None)
+            receipt.setdefault("owned_symlinks", {}).pop(stale_key, None)
+            receipt.setdefault("backups", {}).pop(stale_key, None)
+            if backup_raw:
+                history = receipt.setdefault("drift_backup_history", {}).setdefault(
+                    stale_key, []
+                )
+                if backup_raw not in history:
+                    history.append(backup_raw)
+            retired.append(stale)
+            continue
         if not _path_present(stale):
             if stale_key not in previous_owned:
                 continue
@@ -25849,14 +25895,16 @@ def _reclaim_foreign_launcher_names(
                 retired.append(stale)
                 receipt.setdefault("owned_files", {}).pop(stale_key, None)
                 continue
-        _remove_path(stale)
-        retired.append(stale)
-        receipt.setdefault("owned_files", {}).pop(stale_key, None)
-        backup_raw = receipt.setdefault("backups", {}).pop(stale_key, None)
         if backup_raw:
             _restore_receipt_collision_backup(
                 stale, backup_raw, runtime_home=runtime_home
             )
+        else:
+            # This retired alias has no replacement; no delete/create cycle.
+            _remove_path(stale)
+        retired.append(stale)
+        receipt.setdefault("owned_files", {}).pop(stale_key, None)
+        receipt.setdefault("backups", {}).pop(stale_key, None)
     _checkpoint_runtime_install_receipt(runtime_home, receipt)
     return retired
 
@@ -28299,7 +28347,21 @@ def cmd_runtime_install(args: argparse.Namespace) -> int:
         # fd and its service mutation bounces off this process's own lease.
         os.set_inheritable(descriptor, True)
         with _inherited_tools_install_lease(descriptor):
-            return _install_runtime_pack(args)
+            try:
+                return _install_runtime_pack(args)
+            except BaseException:
+                # Preparation can fail before the transaction owner is entered.
+                # Restore its prior receipt too, so readers do not see a healthy
+                # old generation as permanently install_pending after refusal.
+                pending = _load_runtime_install_receipt(
+                    _runtime_receipt_path(paths["runtime_home"])
+                )
+                if pending.get("install_phase") == "preparing":
+                    _rollback_runtime_config_transaction(paths, pending)
+                    saved = pending.get("preparing_previous_receipt")
+                    if isinstance(saved, dict):
+                        _restore_runtime_publication_receipt(paths, pending, saved)
+                raise
 
 
 def _verify_local_skill_install_resume(
@@ -28382,13 +28444,9 @@ def _install_runtime_pack(
     _assert_runtime_tree_has_no_symlinks(payload_root)
 
     # Reject carried products before staging or writing an install receipt.
-    # Missing independent products are reported; headless runtime install works.
+    # Admission comes from this carrier, never the selected older runtime.
     _refuse_embedded_darwin_products(payload_root)
-    if sys.platform == "darwin":
-        for name, state in _external_products().product_status().items():
-            message = state.get("path") or state.get("message", "")
-            print(f"{name}: {state['status']}: {message}", file=sys.stderr)
-    else:
+    if sys.platform != "darwin":
         _product_terminal_host(generation=payload_root, app_root=app_root)
 
     paths = _runtime_install_paths(getattr(args, "runtime_home", None))
@@ -28506,6 +28564,29 @@ def _install_runtime_pack(
     previous_healthy = False
     if previous and previous.get("version") != version and not rescue_record:
         previous_healthy, _ = _runtime_rescue_verify_destination(paths)
+    # S2/S4: admit prerequisites before writing a pending receipt or selectors.
+    external_products = (
+        _admit_external_products(payload_root, paths=paths, previous=previous)
+        if sys.platform == "darwin"
+        else {}
+    )
+    foundations = _ensure_foundations_installed(
+        payload_root,
+        skip=bool(getattr(args, "skip_foundations", False)),
+        targets=("loctree", "aicx", "prview", "screenscribe")
+        if sys.platform == "darwin"
+        else (),
+        environment={
+            "VIBECRAFTED_SOURCE": str(payload_root),
+            "VIBECRAFTED_RUNTIME_HOME": str(runtime_home),
+            "VIBECRAFTED_LAUNCHER_BIN": str(paths["launcher_home"]),
+        },
+    )
+    if foundations["status"] == "failed":
+        raise RuntimeInstallRefusal(
+            "Required foundations could not be admitted; correct the foundation "
+            "failure shown above and retry Upgrade."
+        )
     previous_created = previous.get("roots_created", {})
     root_created = {
         name: bool(previous_created.get(name)) or not path.exists()
@@ -28959,6 +29040,9 @@ def _install_runtime_pack(
         runtime_home=runtime_home,
         receipt=receipt,
         previous=previous,
+        admitted_frame=Path(external_products["frame"])
+        if external_products
+        else None,
     )
     foundation_service_actions = _repoint_foundation_service_dependents(
         retired_launchers,
@@ -28997,15 +29081,17 @@ def _install_runtime_pack(
     )
     if not rescue_record:
         result["retirement"] = _finish_runtime_retirement(paths, receipt)
-    foundations = _ensure_foundations_installed(
-        generation,
-        skip=bool(getattr(args, "skip_foundations", False)),
-    )
     result["foundations"] = foundations
+    if external_products:
+        result["terminal_host"] = external_products["terminal"]
+        result["frame"] = external_products["frame"]
+        result["external_products"] = {
+            "vc-" + product: {"status": "available", "path": path}
+            for product, path in external_products.items()
+        }
     if emit_result:
         print(json.dumps(result, sort_keys=True))
-    # The runtime generation stays published either way; a red exit here means
-    # "installed, but not a complete product" so wrappers cannot claim success.
+    # Prerequisite failures have already refused before publication.
     return (
         0
         if not projection_conflicts
@@ -29051,15 +29137,97 @@ def _foundations_failure_diagnostic(stdout: str, stderr: str) -> str:
     return _redact_foundation_diagnostic("\n".join(chunks))
 
 
-def _ensure_foundations_installed(generation: Path, *, skip: bool) -> dict[str, Any]:
-    """Drive the bundled foundations installer after the runtime transaction.
+def _admit_external_products(
+    payload_root: Path,
+    *,
+    paths: Mapping[str, Path],
+    previous: Mapping[str, Any],
+) -> dict[str, str]:
+    """S2: the carrier probes, installs missing products, then probes again."""
+    resolver = payload_root / "vibecrafted-core/vibecrafted_core/external_products.py"
+    environment = {
+        **os.environ,
+        "VIBECRAFTED_SOURCE": str(payload_root),
+        "VIBECRAFTED_RUNTIME_HOME": str(paths["runtime_home"]),
+        "VIBECRAFTED_LAUNCHER_BIN": str(paths["launcher_home"]),
+        "PATH": str(paths["launcher_home"]) + os.pathsep + os.environ.get("PATH", ""),
+        # Never accept a caller's hash or hash today's occupant to invent ownership.
+        "VIBECRAFTED_LEGACY_VCFRAME_SHA256": "",
+    }
+    legacy = previous.get("owned_files", {}).get(
+        str(paths["launcher_home"] / "vc-frame")
+    )
+    if isinstance(legacy, str) and re.fullmatch(r"[0-9a-f]{64}", legacy):
+        environment["VIBECRAFTED_LEGACY_VCFRAME_SHA256"] = legacy
+    admitted = {}
+    for product, target in (("terminal", "vc-terminal"), ("frame", "vc-frame")):
+        command = [sys.executable, "-I", str(resolver), product]
+        try:
+            probe = subprocess.run(
+                command,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            if probe.returncode:
+                print(_redact_foundation_diagnostic(probe.stderr), file=sys.stderr)
+                # Existing unadmitted terminal apps belong to the Founder.
+                app = Path("/Applications/vc-terminal.app")
+                if product == "terminal" and (app.exists() or app.is_symlink()):
+                    raise RuntimeInstallRefusal(
+                        "Existing /Applications/vc-terminal.app was not admitted; "
+                        "install a compatible signed and notarized vc-terminal app "
+                        "explicitly, then retry Upgrade."
+                    )
+                installed = _ensure_foundations_installed(
+                    payload_root,
+                    skip=False,
+                    targets=(target,),
+                    environment=environment,
+                )
+                if installed["status"] != "installed":
+                    raise RuntimeInstallRefusal(
+                        f"Could not install {target}; correct the foundation failure "
+                        "shown above and retry Upgrade."
+                    )
+                probe = subprocess.run(
+                    command,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+            if probe.returncode or not Path(probe.stdout.strip()).is_absolute():
+                print(_redact_foundation_diagnostic(probe.stderr), file=sys.stderr)
+                raise RuntimeInstallRefusal(
+                    f"{target} is not admitted by this carrier; install the compatible "
+                    "signed product shown above and retry Upgrade."
+                )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeInstallRefusal(
+                f"Could not verify {target}; restore its signed installer and retry Upgrade."
+            ) from exc
+        admitted[product] = probe.stdout.strip()
+    return admitted
+
+
+def _ensure_foundations_installed(
+    generation: Path,
+    *,
+    skip: bool,
+    targets: Sequence[str] = (),
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Drive the carrier's bundled foundations installer before publication.
 
     No install scenario may finish green without AICX, Loctree, Screenscribe
     and PRView (Vetcoders decision, 2026-10-07). The pack never carries the foundations
     themselves — it carries their installer, and each foundation comes from
-    its own public channel (npm, GitHub releases, PyPI). A failure here does
-    not undo the already-published runtime generation; it fails the install's
-    exit code so no wrapper can report success without the foundations.
+    its own public channel (npm, GitHub releases, PyPI). The caller refuses
+    publication on failure; external products cannot be waived by skip.
     """
     script = generation / "scripts" / "install-foundations.sh"
     record: dict[str, Any] = {
@@ -29080,23 +29248,34 @@ def _ensure_foundations_installed(generation: Path, *, skip: bool) -> dict[str, 
     if not script.is_file():
         record["status"] = "failed"
         record["reason"] = "this Runtime Pack does not bundle install-foundations.sh"
+        print(f"{record['reason']}: {script}", file=sys.stderr)
         return record
     try:
         proc = subprocess.run(
-            ["bash", str(script)],
+            ["bash", str(script), *targets],
             capture_output=True,
             text=True,
             timeout=1800,
             check=False,
             # The external-product resolvers run under this installer's own
             # interpreter, never an unrelated python3 found on PATH.
-            env={**os.environ, "VIBECRAFTED_PYTHON": sys.executable},
+            env={
+                **os.environ,
+                **(environment or {}),
+                "VIBECRAFTED_PYTHON": sys.executable,
+            },
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         record["status"] = "failed"
         record["reason"] = f"foundations installer did not complete: {exc}"
+        print(_redact_foundation_diagnostic(record["reason"]), file=sys.stderr)
         return record
     record["exit_code"] = proc.returncode
+    # S1 consumes the WHOLE stdout as one JSON document. Child banners and
+    # diagnostics belong on stderr, including successful installations.
+    for output in (proc.stdout, proc.stderr):
+        if output:
+            print(_redact_foundation_diagnostic(output), file=sys.stderr)
     stdout_lines = (proc.stdout or "").splitlines()
     stderr_lines = (proc.stderr or "").splitlines()
     tail = "\n".join(stdout_lines[-12:])
@@ -30001,8 +30180,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_runtime_install(args)
         except PreferenceConflict as exc:
             print(json.dumps(exc.envelope, sort_keys=True))
+            print(
+                "Runtime preferences need a choice; resolve the reported conflict and retry Upgrade.",
+                file=sys.stderr,
+            )
             return 2
-        except (RuntimeInstallRefusal, FileNotFoundError, PermissionError) as exc:
+        except (RuntimeError, OSError) as exc:
             print(
                 json.dumps(
                     {
@@ -30014,6 +30197,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     },
                     sort_keys=True,
                 )
+            )
+            reason = " ".join(_redact_foundation_diagnostic(str(exc)).split())
+            print(
+                f"{reason} Correct the reported problem and retry Upgrade.",
+                file=sys.stderr,
             )
             return 2
     elif args.command == "runtime-resolve":

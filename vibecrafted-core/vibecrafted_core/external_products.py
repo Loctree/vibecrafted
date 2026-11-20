@@ -50,6 +50,27 @@ class ProductUnavailable(RuntimeError):
     """A missing or incompatible external product; resolution never downloads it."""
 
 
+def _require_developer_id(path: Path, identifier: str) -> None:
+    """Bind the signed identifier to Apple's Developer ID certificate chain."""
+    requirement = (
+        f'anchor apple generic and identifier "{identifier}" '
+        f'and certificate leaf[subject.OU] = "{TEAM_ID}" '
+        'and certificate 1[field.1.2.840.113635.100.6.2.6] exists '
+        'and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
+    )
+    result = subprocess.run(
+        ["/usr/bin/codesign", "--verify", "--strict", "-R", requirement, str(path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode:
+        raise ProductUnavailable(
+            f"{path} must be {identifier} signed by Developer ID team {TEAM_ID}"
+        )
+
+
 def resolve_terminal() -> Path:
     if terminal_host is None:
         raise ProductUnavailable(f"vc-terminal.app requires macOS. {TERMINAL_HINT}")
@@ -68,7 +89,22 @@ def resolve_terminal() -> Path:
                 raise ProductUnavailable(
                     f"terminal must be Developer ID signed by {TEAM_ID}: {target}"
                 )
-    except (OSError, terminal_host.Refusal, ProductUnavailable) as exc:
+        _require_developer_id(path.parents[2], PRODUCTS["vc-terminal"]["id"])
+        assessment = subprocess.run(
+            ["/usr/sbin/spctl", "--assess", "--type", "execute", str(path.parents[2])],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if assessment.returncode:
+            raise ProductUnavailable("Gatekeeper does not accept vc-terminal.app")
+    except (
+        OSError,
+        subprocess.TimeoutExpired,
+        terminal_host.Refusal,
+        ProductUnavailable,
+    ) as exc:
         raise ProductUnavailable(f"{exc}. {TERMINAL_HINT}") from exc
     return path
 
@@ -103,6 +139,9 @@ def resolve_frame(
         ):
             continue
         try:
+            if sys.platform == "darwin":
+                # Verify before executing an arbitrary PATH occupant.
+                _require_developer_id(physical, PRODUCTS["vc-frame"]["id"])
             result = subprocess.run(
                 [str(candidate), "--version"],
                 capture_output=True,
