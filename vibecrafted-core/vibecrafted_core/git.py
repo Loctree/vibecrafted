@@ -773,6 +773,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     parser.add_argument("project", nargs="?", default=".", help="repository path")
     parser.add_argument("--json", action="store_true", help="emit structured JSON")
+    # Same identity as `vibecrafted --version`: the package that executes.
+    # Imported here because the package __init__ imports this module.
+    from . import __version__
+
+    parser.add_argument("--version", action="version", version=f"vc-git {__version__}")
     parser.set_defaults(
         worktrees=worktrees_command, target=None, compare=None, cuts=None
     )
