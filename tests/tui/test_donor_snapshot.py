@@ -272,8 +272,10 @@ def test_builder_never_captures_the_snapshot_through_command_substitution() -> N
     )
     assert "$(donor_snapshot_create" not in builder
     assert 'donor_snapshot_create "$REPO_ROOT" "$SOURCE_ROOT" "$ROOT_SHA"' in builder
-    assert 'terminal_head="$DONOR_SNAPSHOT_HEAD"' in builder
-    assert 'frame_head="$DONOR_SNAPSHOT_HEAD"' in builder
+    # Terminal and Frame are external products (c26b524b): the main source is
+    # the only snapshot left, and its head must be the bound release revision.
+    assert '[[ "$DONOR_SNAPSHOT_HEAD" == "$ROOT_SHA" ]]' in builder
+    assert 'terminal_head="$DONOR_SNAPSHOT_HEAD"' not in builder
 
 
 def test_snapshot_pins_an_earlier_revision_after_living_head_moves(
