@@ -10,11 +10,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 
 - Vibecrafted.app and its macOS Runtime Pack no longer bundle vc-terminal,
-  vc-frame, or terminal fonts. Install [vc-terminal](https://github.com/vetcoders/vc-terminal/releases)
-  0.18.0 or newer in `/Applications/vc-terminal.app` and [vc-frame](https://github.com/Loctree/vc-frame/releases)
-  4.5.1 or newer (below 5.0.0) on your PATH. The runtime checks product identity
-  and compatibility and reports an install hint when a dependency is missing;
-  its installer leaves both independent products in their own release channels.
+  vc-frame, or terminal fonts; each product has its own release.
+- The installer installs [vc-frame](https://github.com/Loctree/vc-frame/releases)
+  from the release this runtime pins (4.6.0) into
+  `~/.local/share/vc-frame/<version>-<digest>/` and links
+  `~/.local/bin/vc-frame` to it, after checking the release `.sha256` and, on
+  macOS, the Developer ID signature. A compatible vc-frame (4.5.1 or newer,
+  below 5.0.0) already on your PATH is kept, and an installation the
+  installer does not own is never overwritten. A vc-frame that cannot be
+  installed now fails the install, like Loctree and AICX.
+- Install [vc-terminal](https://github.com/Loctree/vc-terminal/releases)
+  0.18.0 or newer in `/Applications/vc-terminal.app`. The runtime checks
+  product identity and compatibility and reports an install hint when a
+  dependency is missing.
 
 - The terminal font chooser offers a curated set only: the five Monaspace NF
   families, then Anonymous Pro. Other fixed-width fonts installed on the Mac are
@@ -29,6 +37,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- The installer's product report no longer stops with a `TypeError` under
+  Python 3.9 (the Xcode interpreter `install.sh` accepts).
 - The terminal no longer looks frosted grey behind translucent backgrounds:
   winit's fixed macOS blur radius of 80 is replaced by the configurable
   `window.blur_radius` (default 20).

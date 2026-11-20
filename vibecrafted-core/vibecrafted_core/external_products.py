@@ -55,7 +55,8 @@ def resolve_terminal() -> Path:
         raise ProductUnavailable(f"vc-terminal.app requires macOS. {TERMINAL_HINT}")
     path = Path(terminal_host.STANDALONE_HOST)
     try:
-        for node in (path, *path.parents[:4]):
+        # install.sh admits Python 3.9, whose Path.parents takes no slice.
+        for node in (path, *list(path.parents)[:4]):
             if node.is_symlink():
                 raise ProductUnavailable(f"symlink in terminal product path: {node}")
         if not path.is_file() or not os.access(path, os.X_OK):

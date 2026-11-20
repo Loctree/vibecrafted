@@ -1391,37 +1391,6 @@ def test_foundations_product_binaries_come_from_npm_only() -> None:
     assert "npm install -g $AICX_NPM_PACKAGE" in aicx_block
 
 
-@pytest.mark.parametrize("available", [True, False])
-def test_foundations_frame_check_requires_explicit_pack_repair(
-    tmp_path: Path, available: bool
-) -> None:
-    text = (REPO_ROOT / "scripts/install-foundations.sh").read_text()
-    body = (
-        "install_vcframe() {"
-        + text.split("install_vcframe() {", 1)[1].split("\n}\n", 1)[0]
-        + "\n}\n"
-    )
-    script = (
-        f"verify_vcframe_cockpit() {{ return {0 if available else 1}; }}\nwarn() {{ printf '%s\\n' \"$@\"; }}\n"
-        + body
-        + "install_vcframe\n"
-    )
-    before = set(tmp_path.iterdir())
-    result = subprocess.run(
-        ["bash", "-c", script],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == (0 if available else 1)
-    if not available:
-        assert (
-            "make install" in result.stdout and "verified Runtime Pack" in result.stdout
-        )
-    assert set(tmp_path.iterdir()) == before
-
-
 def test_foundations_never_overwrite_uv_owned_python_entrypoints() -> None:
     text = (REPO_ROOT / "scripts" / "install-foundations.sh").read_text(
         encoding="utf-8"

@@ -1,10 +1,11 @@
-"""Loctree, AICX, PRView and ScreenScribe come from their own channels.
+"""Loctree, AICX, vc-frame, PRView and ScreenScribe come from their own channels.
 
 npm carries @loctree/loctree and @loctree/aicx, GitHub releases carry
-vetcoders/prview-rs, PyPI carries screenscribe. The Runtime Pack carried
-pinned copies from before those channels existed; agents never resolved them
-(runtime_paths.agent_tool_search_path strips the generation bin), so they only
-lagged their channels and blocked the platforms the channels do not publish.
+Loctree/vc-frame and vetcoders/prview-rs, PyPI carries screenscribe. The
+Runtime Pack carried pinned copies from before those channels existed; agents
+never resolved them (runtime_paths.agent_tool_search_path strips the
+generation bin), so they only lagged their channels and blocked the platforms
+the channels do not publish. vc-frame left the pack with Vibecrafted 4.6.0.
 """
 
 from __future__ import annotations
@@ -493,6 +494,186 @@ def test_prview_never_overwrites_another_install_in_the_launcher_bin(
         )
 
 
+# --- vc-frame from its own GitHub release ---------------------------------------
+
+
+def _pinned_frame_version() -> str:
+    components = json.loads(
+        (REPO_ROOT / "config/source-components.json").read_text(encoding="utf-8")
+    )
+    return components["components"]["vc-frame"]["version"]
+
+
+def _vcframe_release(
+    tmp_path: Path, *, checksum: str | None = None, version: str | None = None
+) -> str:
+    """A file:// release directory shaped like Loctree/vc-frame releases."""
+    target = {
+        ("Darwin", "arm64"): "aarch64-apple-darwin",
+        ("Darwin", "x86_64"): "x86_64-apple-darwin",
+        ("Linux", "x86_64"): "x86_64-unknown-linux-musl",
+        ("Linux", "aarch64"): "aarch64-unknown-linux-musl",
+    }.get((platform.system(), platform.machine()), "unpublished-host")
+    release = tmp_path / "frame-release"
+    staged = tmp_path / "frame-staged"
+    reported = version or _pinned_frame_version()
+    _executable(staged / "vc-frame", f"#!/bin/sh\necho 'vc-frame {reported}'\n")
+    release.mkdir()
+    asset = release / f"vc-frame-{target}.tar.gz"
+    with tarfile.open(asset, "w:gz") as archive:
+        archive.add(staged / "vc-frame", arcname="vc-frame")
+    digest = checksum or hashlib.sha256(asset.read_bytes()).hexdigest()
+    (release / f"{asset.name}.sha256").write_text(
+        f"{digest}  {asset.name}\n", encoding="utf-8"
+    )
+    return target
+
+
+def _run_frame_installer(
+    tmp_path: Path, path: list[Path] | None = None, **extra: str
+) -> subprocess.CompletedProcess[str]:
+    return _run_installer(
+        tmp_path,
+        "vc-frame",
+        path=path or [tmp_path / "bin"],
+        VCFRAME_RELEASE_BASE=f"file://{tmp_path / 'frame-release'}",
+        **extra,
+    )
+
+
+def _frame_store(tmp_path: Path) -> Path:
+    return tmp_path / "home/.local/share/vc-frame"
+
+
+def test_a_compatible_vc_frame_on_path_is_kept(tmp_path: Path) -> None:
+    _vcframe_release(tmp_path)
+    own = _executable(tmp_path / "bin/vc-frame", "#!/bin/sh\necho 'vc-frame 4.9.1'\n")
+
+    result = _run_frame_installer(tmp_path, REQUIRE_FOUNDATIONS="0")
+    output = result.stdout + result.stderr
+
+    assert f"vc-frame already installed: {own.resolve()}" in output
+    assert not _frame_store(tmp_path).exists()
+    assert not (tmp_path / "home/.local/bin/vc-frame").exists()
+
+
+def test_a_vc_frame_asset_that_misses_its_sha256_is_refused(tmp_path: Path) -> None:
+    target = _vcframe_release(tmp_path, checksum="0" * 64)
+
+    result = _run_frame_installer(tmp_path)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "required foundation failed: vc-frame" in result.stderr
+    assert not (tmp_path / "home/.local/bin/vc-frame").exists()
+    assert not _frame_store(tmp_path).exists()
+    if target == "unpublished-host":
+        assert "publishes no release asset" in output
+    else:
+        assert "does not match its release .sha256" in output
+
+
+def test_a_matching_vc_frame_asset_still_needs_the_publishers_signature_on_macos(
+    tmp_path: Path,
+) -> None:
+    target = _vcframe_release(tmp_path)
+
+    result = _run_frame_installer(tmp_path, REQUIRE_FOUNDATIONS="0")
+    output = result.stdout + result.stderr
+    link = tmp_path / "home/.local/bin/vc-frame"
+
+    if target.endswith("apple-darwin"):
+        assert (
+            "is not io.vetcoders.vc-frame signed by Developer ID team MW223P3NPX"
+            in output
+        )
+        assert not link.exists()
+        assert not _frame_store(tmp_path).exists()
+    elif target != "unpublished-host":
+        # Linux carries no Developer ID; the .sha256 is the publisher check.
+        assert link.is_symlink(), output
+        installed = link.resolve()
+        assert installed.parent.parent == _frame_store(tmp_path).resolve()
+        assert installed.parent.name.startswith(_pinned_frame_version() + "-")
+        assert f"Installed vc-frame {_pinned_frame_version()}" in output
+    else:
+        assert "publishes no release asset" in output
+
+
+def test_an_incompatible_vc_frame_release_is_never_linked(tmp_path: Path) -> None:
+    target = _vcframe_release(tmp_path, version="5.0.0")
+
+    result = _run_frame_installer(tmp_path, REQUIRE_FOUNDATIONS="0")
+    output = result.stdout + result.stderr
+
+    assert not (tmp_path / "home/.local/bin/vc-frame").exists()
+    if target in {"x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"}:
+        assert "is not compatible with this runtime" in output
+
+
+def test_vc_frame_never_overwrites_another_install_in_the_launcher_bin(
+    tmp_path: Path,
+) -> None:
+    _vcframe_release(tmp_path)
+    foreign = _executable(
+        tmp_path / "home/.local/bin/vc-frame", "#!/bin/sh\necho 'vc-frame 4.3.3'\n"
+    )
+
+    result = _run_frame_installer(
+        tmp_path, path=[tmp_path / "home/.local/bin", tmp_path / "bin"]
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert foreign.read_text(encoding="utf-8") == "#!/bin/sh\necho 'vc-frame 4.3.3'\n"
+    assert not foreign.is_symlink()
+    assert "belongs to another install; not overwriting it" in output
+    assert "incompatible vc-frame" in output
+
+
+@pytest.mark.skipif(
+    platform.system() != "Linux", reason="Darwin assets need the publisher signature"
+)
+def test_a_managed_vc_frame_link_moves_to_the_pinned_release(tmp_path: Path) -> None:
+    _vcframe_release(tmp_path)
+    old_store = _frame_store(tmp_path) / "4.5.0-000000000000"
+    old = _executable(old_store / "vc-frame", "#!/bin/sh\necho 'vc-frame 4.5.0'\n")
+    link = tmp_path / "home/.local/bin/vc-frame"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(old)
+
+    result = _run_frame_installer(
+        tmp_path, path=[link.parent, tmp_path / "bin"], REQUIRE_FOUNDATIONS="0"
+    )
+
+    assert link.is_symlink(), result.stdout + result.stderr
+    assert link.resolve() != old.resolve()
+    assert link.resolve().parent.name.startswith(_pinned_frame_version() + "-")
+    # The binary a running server started from is never removed.
+    assert old.read_text(encoding="utf-8") == "#!/bin/sh\necho 'vc-frame 4.5.0'\n"
+
+
+def test_check_mode_names_the_pinned_vc_frame_release(tmp_path: Path) -> None:
+    target = _vcframe_release(tmp_path)
+
+    check = _run_installer(
+        tmp_path,
+        "--check",
+        "vc-frame",
+        path=[tmp_path / "bin"],
+        VCFRAME_RELEASE_BASE=f"file://{tmp_path / 'frame-release'}",
+    )
+    output = check.stdout + check.stderr
+
+    assert check.returncode == 0, output
+    assert not (tmp_path / "home/.local/bin/vc-frame").exists()
+    if target != "unpublished-host":
+        assert (
+            f"Would install vc-frame {_pinned_frame_version()} from "
+            f"file://{tmp_path / 'frame-release'}/vc-frame-{target}.tar.gz" in output
+        )
+
+
 # --- screenscribe from PyPI through pipx ---------------------------------------
 
 
@@ -809,7 +990,7 @@ def test_canonical_frame_config_passes_strict_cockpit_gate(
     elif missing:
         (config / missing).unlink()
     fake_bin = tmp_path / "bin"
-    _executable(fake_bin / "vc-frame", "#!/bin/sh\necho 'vc-frame 4.3.3'\n")
+    _executable(fake_bin / "vc-frame", "#!/bin/sh\necho 'vc-frame 4.6.0'\n")
     _executable(fake_bin / "vc-start")
 
     result = _run_installer(

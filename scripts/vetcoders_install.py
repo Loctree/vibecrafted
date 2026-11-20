@@ -29088,6 +29088,9 @@ def _ensure_foundations_installed(generation: Path, *, skip: bool) -> dict[str, 
             text=True,
             timeout=1800,
             check=False,
+            # The external-product resolvers run under this installer's own
+            # interpreter, never an unrelated python3 found on PATH.
+            env={**os.environ, "VIBECRAFTED_PYTHON": sys.executable},
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         record["status"] = "failed"

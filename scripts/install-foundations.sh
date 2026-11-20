@@ -7,7 +7,8 @@ set -euo pipefail
 # Pack never carries them, and an existing working install is left alone):
 #   loctree / loctree-mcp  — npm: @loctree/loctree
 #   aicx / aicx-mcp       — npm: @loctree/aicx
-#   vc-frame               — required donor BINARY installed by this owner from sibling source
+#   vc-frame               — GitHub releases: Loctree/vc-frame, the release this runtime pins
+#                            in config/source-components.json (.sha256 + Developer ID verified)
 #   prview                 — GitHub releases: vetcoders/prview-rs (SHA256SUMS-verified)
 #   screenscribe           — PyPI: screenscribe, installed through uv or pipx
 #
@@ -16,12 +17,14 @@ set -euo pipefail
 #   bash scripts/install-foundations.sh --all             # + framework-owned extras
 #   bash scripts/install-foundations.sh loctree           # Loctree product binaries
 #   bash scripts/install-foundations.sh aicx              # AICX product binaries
-#   bash scripts/install-foundations.sh vc-frame          # hard-install / validate vc-frame
+#   bash scripts/install-foundations.sh vc-frame          # install vc-frame from its release, then validate
 #   bash scripts/install-foundations.sh --check           # dry-run: show what would install
 #   bash scripts/install-foundations.sh --prefix /usr/local  # custom install prefix
 #
-# Product spine (audit SF-2): vc-frame is no longer validate-only. The gate is
-# COCKPIT READY, not PATH-only:
+# Product spine (audit SF-2): vc-frame is an independent product with its own
+# release. A compatible vc-frame already on PATH is kept; otherwise its pinned
+# release is installed into a versioned store with the launcher bin linked to
+# it. Then the gate is COCKPIT READY, not PATH-only:
 #   1. binary exists AND runs
 #   2. product identity (vc-frame, not stock zellij)
 #   3. live physical config.kdl; Launchpad is the layout asset (Frame owns host chrome)
@@ -35,8 +38,9 @@ LOCTREE_NPM_PACKAGE="@loctree/loctree"
 AICX_NPM_PACKAGE="@loctree/aicx"
 PRVIEW_REPO="vetcoders/prview-rs"
 PRVIEW_RELEASE_BASE="${PRVIEW_RELEASE_BASE:-https://github.com/$PRVIEW_REPO/releases/latest/download}"
-# Every published prview Darwin binary carries this Developer ID team.
-PRVIEW_MACOS_TEAM_ID="MW223P3NPX"
+# Every published Darwin binary of prview, vc-frame and vc-terminal carries
+# this Developer ID team.
+PUBLISHER_MACOS_TEAM_ID="MW223P3NPX"
 SCREENSCRIBE_PACKAGE="screenscribe"
 
 # Agent CLIs — npm packages when the vendor publishes an official package.
@@ -77,10 +81,8 @@ AGENTS_REQUIRED=0
 # default (decyzja Macieja 2026-10-06; the 2026-09-25 "advisory" softening was
 # an agent rationalization, not a product decision). Set REQUIRE_FOUNDATIONS=0
 # only for environments that knowingly run without the product spine, e.g.
-# hermetic CI exercising the installer itself. vc-frame is the one spine leg
-# WITHOUT a public channel yet: its hard gate arms only on an EXPLICIT
-# REQUIRE_FOUNDATIONS=1, so the was-set marker is captured before defaulting.
-REQUIRE_FOUNDATIONS_WAS_SET="${REQUIRE_FOUNDATIONS+1}"
+# hermetic CI exercising the installer itself. vc-frame joined them when it
+# got its own GitHub release (Vibecrafted 4.6.0 stopped carrying it).
 REQUIRE_FOUNDATIONS="${REQUIRE_FOUNDATIONS:-1}"
 TARGETS=()
 FOUNDATION_PRIVATE_BIN=""
@@ -608,20 +610,184 @@ install_aicx() {
 }
 
 # ---------------------------------------------------------------------------
-# vc-frame — product frame binary (hard install on product path)
+# vc-frame — independent product, installed from its own GitHub release
 #
-# The Runtime Pack installer publishes vc-frame with its matching config.
-# This foundations step inspects that installation.
+# Vibecrafted no longer carries vc-frame (three products, three lifecycles).
+# The runtime pins the vc-frame release it was built and tested with in
+# config/source-components.json; a compatible vc-frame the user already has
+# is kept and never replaced. external_products.py is the one owner of
+# "compatible": version range, Vibecrafted runtime launchers skipped, first
+# PATH hit final. The runtime config (config.kdl, layouts, composer) is
+# published by the runtime installer and checked by the cockpit gate below.
 # ---------------------------------------------------------------------------
 
-# vc-frame and its product config are installed together by runtime-install.
-# Foundations consumes that result; it cannot build a second donor installation
-# or patch the selected immutable generation.
-install_vcframe() {
+EXTERNAL_PRODUCTS="$SOURCE_DIR/vibecrafted-core/vibecrafted_core/external_products.py"
+SOURCE_COMPONENTS="$SOURCE_DIR/config/source-components.json"
+# The runtime installer names its own interpreter; a direct run uses python3.
+# An absolute path, so a resolver run under a narrowed PATH still finds it.
+if [[ -n "${VIBECRAFTED_PYTHON:-}" && -x "$VIBECRAFTED_PYTHON" ]]; then
+  FOUNDATIONS_PYTHON="$VIBECRAFTED_PYTHON"
+else
+  FOUNDATIONS_PYTHON="$(command -v python3 || true)"
+fi
+# Versioned, never rewritten in place: a running vc-frame server keeps the
+# binary it started from while new clients follow the relinked launcher.
+VCFRAME_STORE="${XDG_DATA_HOME:-$HOME/.local/share}/vc-frame"
+
+# Prints "<repository URL> <version>" for one pinned source component.
+source_component() {
+  "$FOUNDATIONS_PYTHON" -I - "$SOURCE_COMPONENTS" "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    component = json.load(stream)["components"][sys.argv[2]]
+repository = component["repository"]
+if repository.endswith(".git"):
+    repository = repository[: -len(".git")]
+print(repository, component["version"])
+PY
+}
+
+# Prints the resolved vc-frame on success, the resolver's refusal otherwise.
+vcframe_resolve() {
+  [[ -n "$FOUNDATIONS_PYTHON" ]] || { echo "python3 is required to resolve vc-frame"; return 1; }
+  "$FOUNDATIONS_PYTHON" -I "$EXTERNAL_PRODUCTS" frame 2>&1
+}
+
+vcframe_release_target() {
+  case "$(detect_os)-$(detect_arch)" in
+    macos-aarch64) printf 'aarch64-apple-darwin\n' ;;
+    macos-x86_64)  printf 'x86_64-apple-darwin\n' ;;
+    linux-x86_64)  printf 'x86_64-unknown-linux-musl\n' ;;
+    linux-aarch64) printf 'aarch64-unknown-linux-musl\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+# The launcher is ours only when it links into the versioned store.
+vcframe_link_is_managed() {
+  local link="$1" target
+  [[ -L "$link" ]] || return 1
+  target="$(readlink "$link")" || return 1
+  [[ "$target" == "$VCFRAME_STORE/"*/vc-frame ]]
+}
+
+# The cockpit gate after a binary is in place.
+vcframe_cockpit_or_hint() {
   if ! verify_vcframe_cockpit; then
     warn "Repair: run make install from the Vibecrafted checkout with your verified Runtime Pack."
     return 1
   fi
+}
+
+install_vcframe() {
+  local probe pin repository version target asset base link
+  if probe="$(vcframe_resolve)"; then
+    ok "vc-frame already installed: $probe"
+    vcframe_cockpit_or_hint
+    return
+  fi
+  link="$LAUNCHER_PREFIX/vc-frame"
+
+  if ! pin="$(source_component vc-frame)" || [[ "$pin" != *" "* ]]; then
+    warn "This runtime pins no vc-frame release in $SOURCE_COMPONENTS."
+    return 1
+  fi
+  repository="${pin% *}"
+  version="${pin##* }"
+  base="${VCFRAME_RELEASE_BASE:-$repository/releases/download/v$version}"
+  if ! target="$(vcframe_release_target)"; then
+    warn "vc-frame publishes no release asset for $(detect_os)/$(detect_arch) ($repository)."
+    return 1
+  fi
+  asset="vc-frame-${target}.tar.gz"
+
+  if (( CHECK_ONLY )); then
+    info "vc-frame: $probe"
+    info "Would install vc-frame $version from $base/$asset -> $VCFRAME_STORE/$version-<sha>/vc-frame, linked at $link"
+    return 0
+  fi
+
+  if [[ -e "$link" || -L "$link" ]] && ! vcframe_link_is_managed "$link"; then
+    warn "vc-frame: $probe"
+    warn "$link belongs to another install; not overwriting it. Remove or update it, then rerun."
+    return 1
+  fi
+  has_cmd curl || { warn "curl is required to download vc-frame."; return 1; }
+
+  local work expected observed digest store staged
+  work="$(mktemp -d "${TMPDIR:-/tmp}/vibecrafted-vc-frame.XXXXXX")" || return 1
+  if ! curl -fsSL --retry 3 "$base/$asset" -o "$work/$asset" \
+    || ! curl -fsSL --retry 3 "$base/$asset.sha256" -o "$work/$asset.sha256"; then
+    warn "Could not download $asset (+ .sha256) from $base."
+    rm -rf "$work"
+    return 1
+  fi
+  expected="$(awk -v asset="$asset" '$2 == asset || $2 == "*" asset {print $1}' "$work/$asset.sha256")"
+  observed="$(sha256_of "$work/$asset")"
+  if [[ -z "$expected" || "$expected" != "$observed" ]]; then
+    warn "vc-frame $asset does not match its release .sha256; refusing to install it."
+    rm -rf "$work"
+    return 1
+  fi
+  mkdir -p "$work/stage"
+  if ! tar -xzf "$work/$asset" -C "$work/stage" vc-frame 2>/dev/null \
+    || [[ ! -f "$work/stage/vc-frame" || -L "$work/stage/vc-frame" ]]; then
+    warn "vc-frame $asset carries no vc-frame binary."
+    rm -rf "$work"
+    return 1
+  fi
+  if [[ "$(detect_os)" == "macos" ]]; then
+    local signature
+    signature="$(codesign -dv "$work/stage/vc-frame" 2>&1 || true)"
+    if ! codesign --verify --strict "$work/stage/vc-frame" >/dev/null 2>&1 \
+      || ! grep -qx "TeamIdentifier=$PUBLISHER_MACOS_TEAM_ID" <<<"$signature" \
+      || ! grep -qx "Identifier=io.vetcoders.vc-frame" <<<"$signature"; then
+      warn "vc-frame $asset is not io.vetcoders.vc-frame signed by Developer ID team $PUBLISHER_MACOS_TEAM_ID; refusing to install it."
+      rm -rf "$work"
+      return 1
+    fi
+  fi
+  chmod 0755 "$work/stage/vc-frame"
+  if ! probe="$(PATH="$work/stage" vcframe_resolve)"; then
+    warn "Downloaded vc-frame is not compatible with this runtime: $probe"
+    rm -rf "$work"
+    return 1
+  fi
+
+  # Content-addressed directory: a republished asset never rewrites the
+  # binary that a running server was started from.
+  digest="$(sha256_of "$work/stage/vc-frame")"
+  store="$VCFRAME_STORE/$version-${digest:0:12}"
+  if [[ -e "$store" ]]; then
+    if [[ "$(sha256_of "$store/vc-frame" 2>/dev/null)" != "$digest" ]]; then
+      warn "$store exists with different contents; not overwriting it."
+      rm -rf "$work"
+      return 1
+    fi
+  else
+    mkdir -p "$VCFRAME_STORE"
+    staged="$(mktemp -d "$VCFRAME_STORE/.staging.XXXXXX")" || { rm -rf "$work"; return 1; }
+    install -m 0755 "$work/stage/vc-frame" "$staged/vc-frame"
+    mv "$staged" "$store"
+  fi
+  rm -rf "$work"
+
+  # Atomic relink: rename(2) replaces the managed symlink in one step.
+  mkdir -p "$LAUNCHER_PREFIX"
+  ln -s "$store/vc-frame" "$link.new.$$"
+  mv -f "$link.new.$$" "$link"
+  case ":$PATH:" in
+    *":$LAUNCHER_PREFIX:"*) ;;
+    *) export PATH="$LAUNCHER_PREFIX:$PATH" ;;
+  esac
+  if ! probe="$(vcframe_resolve)"; then
+    warn "vc-frame installed at $store, but this PATH still resolves: $probe"
+    return 1
+  fi
+  ok "Installed vc-frame $version from $base/$asset: $link -> $store/vc-frame"
+  vcframe_cockpit_or_hint
 }
 
 
@@ -751,8 +917,8 @@ install_prview() {
   if [[ "$(detect_os)" == "macos" ]]; then
     local signature
     signature="$(codesign -dv "$work/prview" 2>&1 || true)"
-    if ! grep -qx "TeamIdentifier=$PRVIEW_MACOS_TEAM_ID" <<<"$signature"; then
-      warn "prview $asset is not signed by Developer ID team $PRVIEW_MACOS_TEAM_ID; refusing to install it."
+    if ! grep -qx "TeamIdentifier=$PUBLISHER_MACOS_TEAM_ID" <<<"$signature"; then
+      warn "prview $asset is not signed by Developer ID team $PUBLISHER_MACOS_TEAM_ID; refusing to install it."
       rm -rf "$work"
       return 1
     fi
@@ -911,7 +1077,7 @@ Usage: install-foundations.sh [options] [targets...]
 Targets:
   loctree         Install loctree + loctree-mcp from npm when missing
   aicx            Install aicx / aicx-mcp from npm when missing
-  vc-frame        Validate vc-frame product binary
+  vc-frame        Install vc-frame from its pinned GitHub release when missing, then check the cockpit
   prview          Install prview from its GitHub release when missing
   screenscribe    Install screenscribe from PyPI through uv (fetched when missing) or pipx
   sandbox         Optional microsandbox/libkrun runtime
@@ -984,19 +1150,7 @@ for target in "${TARGETS[@]}"; do
   case "$target" in
     loctree)  install_loctree  || foundation_channel_fail loctree ;;
     aicx)     install_aicx     || foundation_channel_fail aicx ;;
-    # vc-frame is a donor installed only by the Vibecrafted owner. There is no
-    # separate vc-frame release or installer fallback — no public channel means
-    # the hard gate arms only on an EXPLICIT REQUIRE_FOUNDATIONS=1; the default
-    # defers a failed cockpit install with a loud warn.
-    vc-frame)
-      if ! install_vcframe; then
-        if [[ -n "$REQUIRE_FOUNDATIONS_WAS_SET" && "$REQUIRE_FOUNDATIONS" == "1" ]]; then
-          note_required_failure vc-frame
-        else
-          warn "vc-frame cockpit incomplete — deferred (no public channel yet); REQUIRE_FOUNDATIONS=1 re-arms the hard gate."
-        fi
-      fi
-      ;;
+    vc-frame) install_vcframe  || foundation_channel_fail vc-frame ;;
     agents)
       if ! install_agents; then
         if (( AGENTS_REQUIRED )); then
