@@ -53,6 +53,7 @@ Zapisz tablicę JSON pod ścieżkę podaną w zadaniu:
 
 `evidence` obowiązkowe dla `landed`, `partial`, `absent`.
 Zachowaj wszystkie `id` ze swojego toru — żadna pozycja nie może wypaść.
+Surowe cytaty źródłowe zostają w oryginalnym języku.
 
 ## Jak pracować — to jest warunek, nie sugestia
 

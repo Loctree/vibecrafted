@@ -7,9 +7,13 @@ description: >
   i przygotuj stabilny plan cięć dla vc-dispatch z uwzględnieniem zależności.
   Używaj przy prośbach „zbierz intencje”, „rozlicz intencje”, „co wynika ze
   źródeł”, „co obiecaliśmy i nie dowieźliśmy”, „co z planu siedzi w kodzie”,
+  „co ustaliliśmy, że zbudujemy”, „co jeszcze jesteśmy winni”, „pokrycie
+  intencji”, „plan kontra kod”, „najwyższa prawda”, „checklista z intencji”,
   albo gdy rozproszone wypowiedzi z transkryptów i sesji trzeba zamienić
-  w kolejkę prac odporną na kompakcję i zmianę maszyny. Oddziel materiał
-  źródłowy od klasyfikacji modeli i twierdzeń agentów o wykonaniu.
+  w kolejkę prac odporną na kompakcję i zmianę maszyny. Sięgaj po ten skill
+  zamiast gołego `aicx search`, gdy trzeba oddzielić materiał źródłowy od
+  klasyfikacji modeli i twierdzeń agentów o wykonaniu, a odpowiedź ma się
+  skończyć planem, nie katalogiem.
 loctree_value: "pytania strukturalne ustalają, czy obietnica ma ścieżkę runtime"
 aicx_value: "indeksowane intencje i kontekst sesji; jedno z wielu źródeł"
 dogfooding: "wymagane — połączenie korpusu, aicx, Loctree i dispatchu"

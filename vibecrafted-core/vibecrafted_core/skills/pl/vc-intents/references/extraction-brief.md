@@ -73,5 +73,8 @@ Nie produkuj pozycji dla samej liczby wyników.
 ## Raport końcowy
 
 Po zapisaniu JSON napisz 5–10 zdań po polsku: ile plików przeczytałeś, ile intencji
-wyciągnąłeś, jakie 3–5 tematów dominuje w twoim okresie, co Cię zaskoczyło, i czy
-zauważyłeś zmianę treści wypowiedzi źródłowych w obrębie swojego okresu (ktoś mówi X, potem nie-X).
+wyciągnąłeś, jakie 3–5 tematów dominuje w twoim okresie (jeśli w ogóle są), co Cię
+zaskoczyło, czy zauważyłeś zmianę treści wypowiedzi źródłowych w obrębie swojego
+okresu (X, potem nie-X) i jakiego kontekstu zabrakło. Późniejsza sprzeczna
+wypowiedź nie musi pochodzić od tego samego mówcy. Cytaty źródłowe przytaczaj
+w ich oryginalnym języku.

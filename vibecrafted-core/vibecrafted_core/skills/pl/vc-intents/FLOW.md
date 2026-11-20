@@ -35,7 +35,7 @@ flowchart TD
 - Dwa moduły konkurują o prawdę, której intencja potrzebuje → `vibecrafted canary <agent>` (potwierdź w kodzie; canary nigdy nie refaktoruje)
 - Kolejka zapisana → `vibecrafted dispatch <intents-implement.*.dispatch.toml>` (domyślnie codex)
 - Worker twierdzi, że cięcie wylądowało → `vibecrafted trust <agent>`, zanim ledger powie `landed`
-- Sprzeczność dwu wypowiedzi źródłowych → `aicx clarify`, potem pytanie do użytkownika
+- Sprzeczność dwu wypowiedzi źródłowych → `aicx clarify`, a gdy dalej nierozstrzygnięta — pytanie do użytkownika
 - Wejściem jest spisany plan, nie korpus → `vibecrafted audit <agent>`
 
 ### Artefakty sesji
