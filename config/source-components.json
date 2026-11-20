@@ -9,7 +9,7 @@
     "vc-terminal": {
       "repository": "https://github.com/Loctree/vc-terminal.git",
       "version": "0.18.0",
-      "revision": "81ffaf7d893fd7f7ce0acb8de3fbd495a7d50802"
+      "revision": "83df7ac9107ab1a6ef9eef4e8ed8bdf0b7373f8d"
     }
   }
 }
