@@ -29042,9 +29042,7 @@ def _install_runtime_pack(
         runtime_home=runtime_home,
         receipt=receipt,
         previous=previous,
-        admitted_frame=Path(external_products["frame"])
-        if external_products
-        else None,
+        admitted_frame=Path(external_products["frame"]) if external_products else None,
     )
     foundation_service_actions = _repoint_foundation_service_dependents(
         retired_launchers,
@@ -29151,8 +29149,13 @@ def _admit_external_products(
     paths: Mapping[str, Path],
     previous: Mapping[str, Any],
 ) -> dict[str, str]:
-    """S2: the carrier probes, installs missing products, then probes again."""
-    resolver = payload_root / "vibecrafted-core/vibecrafted_core/external_products.py"
+    """S2: the carrier probes, installs missing products, then probes again.
+
+    Every probe goes through ``_external_products()``, the one owner every other
+    product decision in this installer reads. The Applications bundle is
+    derived from that owner's ``STANDALONE_HOST`` rather than a second literal,
+    so admission, publication and their doubles can never disagree.
+    """
     environment = {
         **os.environ,
         "VIBECRAFTED_SOURCE": str(payload_root),
@@ -29167,28 +29170,32 @@ def _admit_external_products(
     )
     if isinstance(legacy, str) and re.fullmatch(r"[0-9a-f]{64}", legacy):
         environment["VIBECRAFTED_LEGACY_VCFRAME_SHA256"] = legacy
+    search_path = environment["PATH"]
+
+    def probe(product: str) -> Path:
+        # Load the owner per probe: an install in between must be seen fresh.
+        products = _external_products()
+        if product == "terminal":
+            return Path(products.resolve_terminal())
+        return Path(products.resolve_frame(search_path=search_path))
+
     admitted = {}
     for product, target in (("terminal", "vc-terminal"), ("frame", "vc-frame")):
-        command = [sys.executable, "-I", str(resolver), product]
         try:
-            probe = subprocess.run(
-                command,
-                env=environment,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
-            if probe.returncode:
-                print(_redact_foundation_diagnostic(probe.stderr), file=sys.stderr)
+            try:
+                found = probe(product)
+            except RuntimeError as refusal:
+                print(_redact_foundation_diagnostic(str(refusal)), file=sys.stderr)
                 # Existing unadmitted terminal apps belong to the Founder.
-                app = Path("/Applications/vc-terminal.app")
+                app = Path(_external_products().terminal_host.STANDALONE_HOST).parents[
+                    2
+                ]
                 if product == "terminal" and (app.exists() or app.is_symlink()):
                     raise RuntimeInstallRefusal(
-                        "Existing /Applications/vc-terminal.app was not admitted; "
-                        "install a compatible signed and notarized vc-terminal app "
-                        "explicitly, then retry Upgrade."
-                    )
+                        f"Existing {app} was not admitted; install a compatible "
+                        "signed and notarized vc-terminal app explicitly, then "
+                        "retry Upgrade."
+                    ) from refusal
                 installed = _ensure_foundations_installed(
                     payload_root,
                     skip=False,
@@ -29199,26 +29206,28 @@ def _admit_external_products(
                     raise RuntimeInstallRefusal(
                         f"Could not install {target}; correct the foundation failure "
                         "shown above and retry Upgrade."
+                    ) from refusal
+                try:
+                    found = probe(product)
+                except RuntimeError as still_refused:
+                    print(
+                        _redact_foundation_diagnostic(str(still_refused)),
+                        file=sys.stderr,
                     )
-                probe = subprocess.run(
-                    command,
-                    env=environment,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    check=False,
-                )
-            if probe.returncode or not Path(probe.stdout.strip()).is_absolute():
-                print(_redact_foundation_diagnostic(probe.stderr), file=sys.stderr)
-                raise RuntimeInstallRefusal(
-                    f"{target} is not admitted by this carrier; install the compatible "
-                    "signed product shown above and retry Upgrade."
-                )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+                    raise RuntimeInstallRefusal(
+                        f"{target} is not admitted by this carrier; install the "
+                        "compatible signed product shown above and retry Upgrade."
+                    ) from still_refused
+        except OSError as exc:
             raise RuntimeInstallRefusal(
                 f"Could not verify {target}; restore its signed installer and retry Upgrade."
             ) from exc
-        admitted[product] = probe.stdout.strip()
+        if not found.is_absolute():
+            raise RuntimeInstallRefusal(
+                f"{target} is not admitted by this carrier; install the compatible "
+                "signed product shown above and retry Upgrade."
+            )
+        admitted[product] = str(found)
     return admitted
 
 
@@ -30193,7 +30202,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        except (RuntimeError, OSError) as exc:
+        # Refusals only: a programming fault stays a visible traceback.
+        except (RuntimeInstallRefusal, FileNotFoundError, PermissionError) as exc:
             print(
                 json.dumps(
                     {
@@ -30207,10 +30217,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             reason = " ".join(_redact_foundation_diagnostic(str(exc)).split())
-            print(
-                f"{reason} Correct the reported problem and retry Upgrade.",
-                file=sys.stderr,
-            )
+            # One actionable sentence ends stderr; never append a second one.
+            if not reason.endswith("retry Upgrade."):
+                reason = f"{reason} Correct the reported problem and retry Upgrade."
+            print(reason, file=sys.stderr)
             return 2
     elif args.command == "runtime-resolve":
         return cmd_runtime_resolve(args)

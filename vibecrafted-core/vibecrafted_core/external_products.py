@@ -55,8 +55,8 @@ def _require_developer_id(path: Path, identifier: str) -> None:
     requirement = (
         f'anchor apple generic and identifier "{identifier}" '
         f'and certificate leaf[subject.OU] = "{TEAM_ID}" '
-        'and certificate 1[field.1.2.840.113635.100.6.2.6] exists '
-        'and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
+        "and certificate 1[field.1.2.840.113635.100.6.2.6] exists "
+        "and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
     )
     result = subprocess.run(
         ["/usr/bin/codesign", "--verify", "--strict", "-R", requirement, str(path)],
@@ -69,6 +69,19 @@ def _require_developer_id(path: Path, identifier: str) -> None:
         raise ProductUnavailable(
             f"{path} must be {identifier} signed by Developer ID team {TEAM_ID}"
         )
+
+
+def _require_gatekeeper(app: Path) -> None:
+    """Gatekeeper must accept the bundle for execution (notarization included)."""
+    assessment = subprocess.run(
+        ["/usr/sbin/spctl", "--assess", "--type", "execute", str(app)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if assessment.returncode:
+        raise ProductUnavailable(f"Gatekeeper does not accept {app.name}")
 
 
 def resolve_terminal() -> Path:
@@ -90,15 +103,7 @@ def resolve_terminal() -> Path:
                     f"terminal must be Developer ID signed by {TEAM_ID}: {target}"
                 )
         _require_developer_id(path.parents[2], PRODUCTS["vc-terminal"]["id"])
-        assessment = subprocess.run(
-            ["/usr/sbin/spctl", "--assess", "--type", "execute", str(path.parents[2])],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        if assessment.returncode:
-            raise ProductUnavailable("Gatekeeper does not accept vc-terminal.app")
+        _require_gatekeeper(path.parents[2])
     except (
         OSError,
         subprocess.TimeoutExpired,

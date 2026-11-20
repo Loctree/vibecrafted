@@ -26,9 +26,10 @@ set -euo pipefail
 # Product spine (audit SF-2): vc-frame is an independent product with its own
 # release. A compatible vc-frame already on PATH is kept; otherwise its pinned
 # release is installed into a versioned store with the launcher bin linked to
-# it. Real provisioning ends at resolver admission (S2); the carrier checks
-# runtime configuration after publication. The historical --check cockpit
-# inspection still covers:
+# it. Real provisioning ends at resolver admission (S2), before the carrier
+# publishes the runtime configuration, so a real run does not inspect the
+# cockpit and the carrier does not repeat it after publication. The --check
+# cockpit inspection covers:
 #   1. binary exists AND runs
 #   2. product identity (vc-frame, not stock zellij)
 #   3. live physical config.kdl; Launchpad is the layout asset (Frame owns host chrome)
