@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import os
@@ -1214,73 +1213,71 @@ def test_native_host_with_unversioned_framework_library(tmp_path):
     assert "stdlib unavailable in this generation" in bad_check.stderr
 
 
-def test_fixed_terminal_host_refuses_generation_app_identity(tmp_path):
+def _load_installer(name):
     spec = importlib.util.spec_from_file_location(
-        "installer_runtime_owners", ROOT / "scripts/vetcoders_install.py"
+        name, ROOT / "scripts/vetcoders_install.py"
     )
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    if sys.platform != "darwin":
-        pytest.skip("fixed app identity is macOS only")
-    module._FIXED_TERMINAL_HOST = (
-        tmp_path / "Applications/Vibecrafted.app/Contents/MacOS/vc-terminal"
-    )
+    return module
+
+
+def test_darwin_terminal_host_is_only_the_external_product(tmp_path, monkeypatch):
+    """After the external-products cut a Darwin generation never hosts the
+    terminal itself: admission asks the independent vc-terminal product and
+    reports its install hint when it is absent."""
+    module = _load_installer("installer_runtime_owners")
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    external = tmp_path / "Applications/vc-terminal.app/Contents/MacOS/vc-terminal"
+
+    class Products:
+        available = False
+
+        @classmethod
+        def resolve_terminal(cls):
+            if not cls.available:
+                raise RuntimeError(
+                    "terminal executable missing. Install vc-terminal >=0.18.0"
+                )
+            return external
+
+    monkeypatch.setattr(module, "_external_products", lambda: Products)
     with pytest.raises(
-        module.RuntimeInstallRefusal, match="pending paired notarized app handoff"
+        module.RuntimeInstallRefusal, match="Install vc-terminal >=0.18.0"
     ):
         module._product_terminal_host(
             generation=tmp_path / "releases/version", app_root=tmp_path / "other.app"
         )
+    Products.available = True
+    assert (
+        module._product_terminal_host(
+            generation=tmp_path / "releases/version", app_root=tmp_path / "other.app"
+        )
+        == external
+    )
     assert not module._is_product_bundle_terminal_host(
         tmp_path / "libexec/vc-terminal.app/Contents/MacOS/alacritty"
     )
 
 
-@pytest.mark.parametrize("damage", ["missing", "malformed", "symlink", "unmatched"])
-def test_fixed_host_admission_preserves_active_runtime_and_config(
-    tmp_path, monkeypatch, damage
+@pytest.mark.parametrize(
+    "carried", ["libexec/vc-terminal", "libexec/vc-terminal.app", "libexec/vc-frame"]
+)
+def test_carried_darwin_product_is_refused_before_runtime_or_config_change(
+    tmp_path, monkeypatch, carried
 ):
-    spec = importlib.util.spec_from_file_location(
-        "installer_admission_" + damage, ROOT / "scripts/vetcoders_install.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = _load_installer("installer_admission_" + carried.replace("/", "_"))
     monkeypatch.setattr(module.sys, "platform", "darwin")
-    host = tmp_path / "Applications/Vibecrafted.app/Contents/MacOS/vc-terminal"
-    host.parent.mkdir(parents=True)
-    shutil.copyfile("/usr/bin/true", host)
-    host.chmod(0o755)
-    contents = host.parent.parent
-    (contents / "Resources").mkdir()
-    (contents / "Resources/Vibecrafted.icns").write_bytes(b"icon")
-    info = contents / "Info.plist"
-    info.write_bytes(
-        plistlib.dumps(
-            {
-                "CFBundleIdentifier": "io.vetcoders.vibecrafted",
-                "CFBundleExecutable": "Vibecrafted",
-                "CFBundleName": "Vibecrafted",
-                "CFBundleDisplayName": "Vibecrafted",
-                "CFBundleIconFile": "Vibecrafted.icns",
-            }
-        )
-    )
-    monkeypatch.setattr(module, "_FIXED_TERMINAL_HOST", host)
-
-    def signer(path):
-        return hashlib.sha256(
-            (host if path.is_dir() else path).read_bytes()
-        ).hexdigest(), "FIXTURE_TEAM"
-
-    monkeypatch.setattr(module, "_signed_terminal_identity", signer)
     payload = tmp_path / "payload"
-    (payload / "libexec").mkdir(parents=True)
-    candidate = payload / "libexec/vc-terminal"
-    shutil.copyfile(host, candidate)
-    candidate.chmod(0o755)
-    (payload / "VERSION").write_text("4.4.0+gfixture\n")
+    product = payload / carried
+    if carried.endswith(".app"):
+        (product / "Contents/MacOS").mkdir(parents=True)
+    else:
+        product.parent.mkdir(parents=True)
+        shutil.copyfile("/usr/bin/true", product)
+        product.chmod(0o755)
+    (payload / "VERSION").write_text("4.6.0+gfixture\n")
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     active = runtime / "active.json"
@@ -1290,17 +1287,9 @@ def test_fixed_host_admission_preserves_active_runtime_and_config(
     config_file.write_text('[server]\nbind_host="127.0.0.1"\n')
     before = active.read_bytes(), config_file.read_bytes()
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    if damage == "missing":
-        host.unlink()
-    elif damage == "malformed":
-        info.write_text("not a plist")
-    elif damage == "symlink":
-        host.unlink()
-        host.symlink_to(candidate)
-    else:
-        candidate.write_bytes(candidate.read_bytes() + b"different native code")
     with pytest.raises(
-        module.RuntimeInstallRefusal, match="pending paired notarized app handoff"
+        module.RuntimeInstallRefusal,
+        match=f"must not be staged in a Darwin Runtime Pack: {carried}",
     ):
         module._install_runtime_pack(
             Namespace(

@@ -42,13 +42,17 @@ def _isolate_vibecrafted_runtime_env(
     After the strip, pin ``VIBECRAFTED_HOME`` to a pytest tmp dir. Leaving it
     unset falls through to the operator ``~/.vibecrafted`` and tests write a
     real workspace (HAK-31 / C10).
+
+    ``XDG_CONFIG_HOME`` is pinned beside it: ``server_config.config_path`` would
+    otherwise read the operator's ``~/.config/vibecrafted/config.toml``, and a
+    durable permission opt-in there (``bypass``) turned the default-policy
+    tests red on that host only. ``HOME`` stays, since Git and uv need it.
     """
-    isolated = (
-        tmp_path_factory.mktemp("vc-home") / _home_isolation.ISOLATED_HOME_DIRNAME
-    )
+    root = tmp_path_factory.mktemp("vc-home")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(root / "xdg-config"))
     return _home_isolation.isolate_vibecrafted_test_env(
         monkeypatch,
-        isolated,
+        root / _home_isolation.ISOLATED_HOME_DIRNAME,
         strip_prefixes=("VIBECRAFTED_", "VC_FRAME", "ZELLIJ"),
         restore={"VIBECRAFTED_LIVE_VIEWER": "0"},
     )

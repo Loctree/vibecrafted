@@ -136,6 +136,7 @@ def test_intents_plan_bucket_follows_origin_through_a_symlink(
             limit=None,
             gate=None,
             gate_expect=None,
+            lang="en",
         )
         module.cmd_plan(namespace)
     day_dirs = list((home / "artifacts").glob("*/*/*"))

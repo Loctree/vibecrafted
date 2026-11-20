@@ -362,6 +362,11 @@ def test_resume_by_run_returns_to_the_recorded_container(
     monkeypatch.setattr(
         "vibecrafted_core.workflow.lookup_run", lambda _run: dict(parent)
     )
+    # Continuation ownership reads recorded identity facts, not lookup_run.
+    monkeypatch.setattr(
+        "vibecrafted_core.workflow._read_identity_run_facts",
+        lambda _run: dict(parent),
+    )
     monkeypatch.setattr(
         "vibecrafted_core.workflow._native_resume_meta", lambda *_a, **_k: {}
     )
