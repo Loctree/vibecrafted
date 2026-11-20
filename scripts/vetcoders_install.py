@@ -9748,11 +9748,13 @@ def _materialize_runtime_generation_vc_terminal_entry(
     bin_term = runtime_root / "bin" / "vc-terminal"
     libexec = runtime_root / "libexec" / "vc-terminal"
     _refuse_embedded_darwin_products(runtime_root)
-    libexec.parent.mkdir(parents=True, exist_ok=True)
+    # Only a native host moves into libexec; a Darwin generation has none and
+    # gets no empty libexec it would have to prove at retirement.
     if bin_term.is_file() and _is_native_executable(bin_term):
         if libexec.exists() and _is_native_executable(libexec):
             bin_term.unlink()
         else:
+            libexec.parent.mkdir(parents=True, exist_ok=True)
             os.replace(bin_term, libexec)
             libexec.chmod(0o755)
     has_native_host = libexec.is_file() and _is_native_executable(libexec)
