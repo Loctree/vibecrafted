@@ -45,8 +45,9 @@ def test_install_foundations_check_falls_back_to_home_without_vibecrafted_root(
         text=True,
     )
 
-    assert str(home / ".local" / "share" / "vibecrafted" / "bin") in result.stdout
-    assert str(home / ".local" / "bin") in result.stdout
+    # G2: the banner naming both bins is stderr; plan lines stay on stdout.
+    assert str(home / ".local" / "share" / "vibecrafted" / "bin") in result.stderr
+    assert str(home / ".local" / "bin") in result.stderr
     assert (
         "Would install Loctree from npm: npm install -g @loctree/loctree"
         in result.stdout
@@ -149,4 +150,5 @@ def test_install_foundations_explicit_agents_target_fails_when_bootstrap_fails(
     )
 
     assert result.returncode == 1
-    assert "Agent CLIs:" in result.stdout
+    # G2: warnings, including this summary, are stderr.
+    assert "Agent CLIs:" in result.stderr
