@@ -1882,87 +1882,6 @@ then
 fi
 bootstrap_python_usable=1
 
-# The verified App carries its own admission and provisioning owner.
-# The journaled updater installs that App, then --complete invokes its carrier
-# installer; the bootstrap does not judge terminal/frame layout or pairing.
-CARRIER_APP_ROOT="/Applications/Vibecrafted.app"
-
-install_channel_dmg() {
-  local helper="$candidate_root/scripts/vc-app-update.sh"
-  [[ -f "$helper" ]] || die "Verified carrier is missing its App transaction helper"
-  stage_channel_app
-  local staged_app="$staged_channel_app"
-  # Bind transport artifacts, not product layout: the installed carrier must
-  # publish the exact prebuilt pack authenticated for this channel revision.
-  local carrier="$staged_app/Contents/Resources/runtime-pack"
-  local bundled_packs=("$carrier"/Vibecrafted_RuntimePack_*.tar.gz)
-  [[ ${#bundled_packs[@]} -eq 1 && -f "${bundled_packs[0]}" && ! -L "${bundled_packs[0]}" ]] \
-    || die "Authenticated App must contain exactly one Runtime Pack"
-  [[ "$(sha256_of_file "${bundled_packs[0]}")" == "$(sha256_of_file "$selected_runtime_pack")" ]] \
-    || die "Channel App/Runtime Pack mismatch; prior App and runtime preserved"
-  bash "$carrier/install-runtime-pack.sh" --pack "${bundled_packs[0]}" \
-    --verify-only --expected-source-revision "$expected_revision" \
-    >"$tmpdir/runtime-pack-verification.json" \
-    || die "Carrier refused channel Runtime Pack authentication/provenance; prior App preserved"
-  # A live Main instance of the App would survive the file swap and then hold
-  # the old binary open; --relaunch (open -n) would start a second instance —
-  # two generations at once. Mirror install-app.sh: gracefully quit the Main
-  # role first (Frame sessions, PTYs and workers survive), then bind the
-  # transaction to its pid/start so the swap waits for a clean exit.
-  local helper_args=()
-  local quit_identity=""
-  quit_identity="$("$bootstrap_python" -I -S "$candidate_root/scripts/lib/app-main-identity.py" "$CARRIER_APP_ROOT" --quit)" \
-    || die "Could not establish exact App Main ownership; prior App preserved"
-  if [[ -n "$quit_identity" ]]; then
-    local quit_pid quit_start
-    quit_pid="${quit_identity%%$'\n'*}"
-    quit_start="${quit_identity#*$'\n'}"
-    if [[ "$quit_pid" =~ ^[1-9][0-9]*$ && "$quit_start" != "$quit_identity" && -n "$quit_start" ]]; then
-      info "▸ Gracefully quitting the running App Main (pid $quit_pid) — frame sessions survive"
-      helper_args+=(--wait-pid "$quit_pid" --wait-start "$quit_start" --wait-timeout 60)
-    else
-      die "Malformed Main ownership receipt; prior App preserved"
-    fi
-  fi
-  # vc-app-update.sh is the sole UI-bundle mutation owner and requires the full
-  # argument set (usage exits 2 without it): --source/--destination/--receipt
-  # plus --mode replace --complete --relaunch, mirroring install-app.sh. The
-  # state dir keeps the transaction receipts for recovery.
-  local state_dir="${VIBECRAFTED_HOME:-$HOME/.vibecrafted}/vibecrafted-product-update"
-  local transaction
-  transaction="install-app-$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
-  local transaction_dir="$state_dir/transactions/$transaction"
-  mkdir -p "$transaction_dir" || die "Cannot create App transaction receipts in $transaction_dir"
-  # run_candidate_command already captures this entire handoff; nesting
-  # installer_capture would reuse descriptors closed in its child shell.
-  VIBECRAFTED_UPDATE_PYTHON="$bootstrap_python" bash "$helper" \
-    --source "$staged_app" \
-    --destination "$CARRIER_APP_ROOT" \
-    --receipt "$transaction_dir/receipt.json" \
-    --admission "$transaction_dir/admission.json" \
-    --journal "$transaction_dir/journal.json" \
-    --transaction "$transaction" \
-    --mode replace \
-    --complete \
-    --relaunch \
-    ${helper_args[@]+"${helper_args[@]}"} \
-    || {
-      # The refusal message must match what actually happened: once the
-      # receipt says replaced=true the App IS swapped — "prior App preserved"
-      # would be a lie. The prior binary survives in the capture directory.
-      local receipt_file="$transaction_dir/receipt.json"
-      local replaced="unknown"
-      if [[ -f "$receipt_file" ]]; then
-        replaced="$("$bootstrap_python" -I -S -c 'import json,sys; print(json.load(open(sys.argv[1])).get("replaced"))' "$receipt_file" 2>/dev/null || echo unknown)"
-      fi
-      if [[ "$replaced" == "True" ]]; then
-        die "App transaction failed AFTER the swap (receipt: $receipt_file says replaced=true). The new App is installed; the prior binary is preserved in the capture directory. Inspect the journal: $transaction_dir/journal.json"
-      fi
-      die "App transaction refused before any swap (receipt: $receipt_file); prior App preserved"
-    }
-  info "▸ App installed via $transaction (receipt: $transaction_dir/receipt.json)"
-}
-
 if [[ "$channel_mode" == "1" ]]; then
 
   # Resolve latest version from the channel manifest instead of hard-pinning.
@@ -2139,24 +2058,21 @@ run_candidate_command() {
   exit "$status"
 }
 
-# The carrier installer owns external-product provisioning before publication.
-# Additional command-line foundations are installed only after that handoff.
+# The verified candidate's carrier installer is the single orchestration owner:
+# it provisions external products and publishes the pack. The bootstrap never
+# quits, replaces or relaunches /Applications/Vibecrafted.app; starting a new
+# App generation stays with the App's own Upgrade. Additional command-line
+# foundations are installed only after that handoff.
 # Invoked through run_candidate_command "$@", which shellcheck cannot follow:
 # newer releases flag the function (SC2329), older ones its body (SC2317).
 # shellcheck disable=SC2317,SC2329
 install_selected_runtime_pack() {
   local foundations=(loctree aicx prview screenscribe vc-frame)
-  if [[ "$PLATFORM_OS" == "macos" && "$channel_mode" == "1" ]]; then
-    # --complete calls the installed App's own carrier installer exactly once.
-    install_channel_dmg || return $?
-    foundations+=(vc-terminal)
-  else
-    (cd "$candidate_root" \
-      && VIBECRAFTED_RUNTIME_PACK="$selected_runtime_pack" \
-        bash scripts/install-runtime-pack.sh \
-        --expected-source-revision "$expected_revision") || return $?
-    if [[ "$PLATFORM_OS" == "macos" ]]; then foundations+=(vc-terminal); fi
-  fi
+  (cd "$candidate_root" \
+    && VIBECRAFTED_RUNTIME_PACK="$selected_runtime_pack" \
+      bash scripts/install-runtime-pack.sh \
+      --expected-source-revision "$expected_revision") || return $?
+  if [[ "$PLATFORM_OS" == "macos" ]]; then foundations+=(vc-terminal); fi
   (cd "$candidate_root" \
     && bash scripts/install-foundations.sh "${foundations[@]}") \
     || return $?
@@ -2367,9 +2283,9 @@ fi
 # yet. The installer owns that transition under its cross-process lease.
 info "✓ Verified vibecrafted $_installed_version candidate; transactional install is next"
 
-# macOS channel bootstrap hands off through the journaled App transaction.
-# Its --complete step runs the installed carrier's provisioning/publication
-# owner; no bootstrap-side external-product or paired-layout verdict applies.
+# macOS channel bootstrap: the candidate's carrier installer owns provisioning
+# and publication; no bootstrap-side external-product or paired-layout verdict
+# applies, and the installed App is left alone.
 if [[ "$PLATFORM_OS" == "macos" && "$channel_mode" == "1" && -n "$selected_runtime_pack" && "$use_gui" != "1" ]]; then
   if [[ "$installer_output" == "1" ]]; then
     installer_stage 2 "Install Vibecrafted and command-line tools"
