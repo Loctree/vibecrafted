@@ -6,13 +6,14 @@ import hashlib
 import json
 import os
 import platform
+import plistlib
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from _runtime_pack_fixture import seed_runtime_pack
+from _runtime_pack_fixture import private_runtime_pack_seed, seed_runtime_pack
 from vibecrafted_core.runtime_pack_contract import LINUX_EXECUTABLES, write_provenance
 
 from tests.tui.test_runtime_pack_rescue import _seal_runtime_pack_for_admission
@@ -130,11 +131,42 @@ def test_make_installer_kit_contains_source_closure_and_trust(tmp_path: Path) ->
     assert os.access(kit / "install-runtime-pack.sh", os.X_OK)
 
 
+def _admitted_product_seed(tmp_path: Path):
+    """Road B: the carrier publishes only with admitted terminal/frame products.
+
+    Private products under tmp_path and a child binding in the carrier's own
+    installer copy; the host's /Applications/vc-terminal.app is never consulted.
+    """
+    terminal = tmp_path / "Applications/vc-terminal.app/Contents/MacOS/vc-terminal"
+    terminal.parent.mkdir(parents=True)
+    shutil.copyfile("/usr/bin/true", terminal)
+    terminal.chmod(0o755)
+    (terminal.parents[1] / "Info.plist").write_bytes(
+        plistlib.dumps(
+            {
+                "CFBundleIdentifier": "io.vetcoders.vc-terminal",
+                "CFBundleExecutable": "vc-terminal",
+                "CFBundleShortVersionString": "0.18.0",
+            }
+        )
+    )
+    frame = tmp_path / "external-bin/vc-frame"
+    frame.parent.mkdir()
+    frame.write_text('#!/bin/sh\necho "vc-frame 4.6.0"\n', encoding="utf-8")
+    frame.chmod(0o755)
+    return private_runtime_pack_seed(terminal, fixture_root=tmp_path)
+
+
 @pytest.mark.parametrize(
     "key_mode", ["adjacent", "adjacent-before-env", "env", "repo", "wrong-adjacent"]
 )
 def test_detached_kit_installs_signed_pack(tmp_path: Path, key_mode: str) -> None:
-    payload = seed_runtime_pack(tmp_path / "payload", version="9.9.9+kit")
+    seed = (
+        _admitted_product_seed(tmp_path)
+        if platform.system() == "Darwin"
+        else seed_runtime_pack
+    )
+    payload = seed(tmp_path / "payload", version="9.9.9+kit")
     _seal_runtime_pack_for_admission(payload)
     arch = "arm64" if platform.machine() in ("arm64", "aarch64") else "x64"
     if platform.system() == "Linux":
@@ -244,8 +276,9 @@ def test_detached_kit_installs_signed_pack(tmp_path: Path, key_mode: str) -> Non
         assert "9.9.9+kit" in json.dumps(receipt)
         assert (home / ".local/bin/vibecrafted").is_file()
         if platform.system() == "Darwin":
-            assert "Install vc-frame >=4.5.1,<5.0.0 on PATH" in result.stderr
-            assert not (home / ".local/bin/vc-frame").exists()
+            # Admitted independent products: no install hint, and the pack
+            # still embeds neither a terminal nor a frame (Road B).
+            assert "Install vc-frame >=4.5.1,<5.0.0 on PATH" not in result.stderr
             assert not (home / ".local/bin/vc-terminal").exists()
             generation = Path(json.loads(active.read_text())["runtime_root"])
             assert not (generation / "libexec/vc-terminal").exists()
