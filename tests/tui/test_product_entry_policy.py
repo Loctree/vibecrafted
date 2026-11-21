@@ -55,6 +55,7 @@ from typing import NamedTuple
 import pytest
 
 from scripts import vetcoders_install as installer
+from tests._apple_trust_fixture import bind_apple_trust_in_copy
 
 REPO = Path(__file__).resolve().parents[2]
 WRAPPER = REPO / "scripts" / "vc-frame-product-entry.sh"
@@ -265,6 +266,12 @@ def _stage_generation(
             destination = root / "vibecrafted-core/vibecrafted_core" / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO / "vibecrafted-core/vibecrafted_core" / name, destination)
+        # The staged engine cannot carry the Developer ID signature; only this
+        # copy's resolver trusts it, and only it.
+        bind_apple_trust_in_copy(
+            root / "vibecrafted-core/vibecrafted_core/external_products.py",
+            trusted=(engine_path,),
+        )
         path_entries.insert(0, str(engine_path.parent))
     else:
         # The generation-local engine is the retained Linux contract. Exercise

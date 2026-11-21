@@ -21,6 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from scripts import vetcoders_install as installer
+from tests._apple_trust_fixture import double_apple_trust
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -380,6 +381,13 @@ def _vc_fixture_product_identity(path):
         raise _vc_fixture_products.terminal_host.Refusal(78, str(error)) from error
     return _vc_fixture_products.terminal_host.CodeIdentity(digest[:40], _vc_fixture_products.TEAM_ID, False)
 _vc_fixture_products.terminal_host.static_code_identity = _vc_fixture_product_identity
+# The Apple trust boundary (Developer ID requirement, Gatekeeper) is doubled for
+# this fixture's own bundle and Frame only; any other path meets the real check.
+_vc_fixture_trusted = (_FIXED_TERMINAL_HOST.parents[2], (_FIXED_TERMINAL_HOST.parents[4] / "external-bin/vc-frame").resolve())
+_vc_fixture_real_developer_id = _vc_fixture_products._require_developer_id
+_vc_fixture_real_gatekeeper = _vc_fixture_products._require_gatekeeper
+_vc_fixture_products._require_developer_id = lambda path, identifier: None if Path(path) in _vc_fixture_trusted else _vc_fixture_real_developer_id(path, identifier)
+_vc_fixture_products._require_gatekeeper = lambda app: None if Path(app) in _vc_fixture_trusted else _vc_fixture_real_gatekeeper(app)
 _vc_fixture_frame_resolver = _vc_fixture_products.resolve_frame
 def _vc_fixture_frame(**kwargs):
     # fixed_terminal_fixture places Frame beside the fixed Terminal host.
@@ -449,6 +457,7 @@ def fixed_terminal_fixture(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(installer, "_signed_terminal_identity", code_identity)
     monkeypatch.setattr(module.terminal_host, "static_code_identity", product_identity)
+    double_apple_trust(monkeypatch, module, trusted=(host.parents[2], frame.resolve()))
     frame_resolver = module.resolve_frame
     monkeypatch.setattr(
         module,
