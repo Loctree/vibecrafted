@@ -67,13 +67,23 @@ if [ -z "$runtime" ]; then
     esac
 fi
 
+# Trailers form one paragraph (the commit-msg "Expected shape"). A trailer joins
+# the block already ending the message; only the first one opens it after a
+# single blank line. Trailing blank lines are dropped so they cannot split it.
 append_trailer() {
     local key="$1"
     local value="$2"
+    local content last separator
     if grep -Eq "^${key}:" "$msg_file"; then
         return 0
     fi
-    printf '\n%s: %s\n' "$key" "$value" >> "$msg_file"
+    content="$(cat "$msg_file")"
+    last="${content##*$'\n'}"
+    separator=$'\n'
+    if [[ "$last" =~ ^[A-Za-z][A-Za-z0-9_-]*:\  ]]; then
+        separator=""
+    fi
+    printf '%s\n%s%s: %s\n' "$content" "$separator" "$key" "$value" > "$msg_file"
 }
 
 append_trailer "Authored-By" "${agent} <agents@vetcoders.io>"
