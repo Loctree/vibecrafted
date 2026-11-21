@@ -1611,13 +1611,13 @@ func expect(_ condition: Bool, _ label: String) {
 
 let fullSha = "0a5eaaea607d07c3dcac1bb321c502d41273e1e0"
 
-expect(!shouldOfferRuntimeUpgrade(installed: "4.3.1+gabcdef12", carrier: "4.3.1+gabcdef12"), "parity stays quiet")
-expect(!shouldOfferRuntimeUpgrade(installed: "4.4.0+gabcdef12", carrier: "4.3.1+gabcdef12"), "older stays quiet")
-expect(!shouldOfferRuntimeUpgrade(installed: "4.3.1+gabcdef12", carrier: "4.3.1+g12345678"), "hashes do not prove order")
-expect(shouldOfferRuntimeUpgrade(installed: "4.3.1+gabcdef12", carrier: "4.4.0+g12345678"), "new release upgrade")
-expect(!shouldOfferRuntimeUpgrade(installed: "", carrier: "unknown"), "unknown stays quiet")
-expect(!shouldOfferRuntimeUpgrade(installed: "+", carrier: "5.0.0"), "malformed stays quiet")
-expect(!shouldOfferRuntimeUpgrade(installed: "unknown", carrier: "5.0.0"), "unknown installed stays quiet")
+expect(runtimeCarrierRelation(active: "4.3.1+gabcdef12", carrier: "4.3.1+gabcdef12") == .current, "parity is current")
+expect(runtimeCarrierRelation(active: "4.4.0+gabcdef12", carrier: "4.3.1+gabcdef12") == .downgrade, "an older carrier is a downgrade")
+expect(runtimeCarrierRelation(active: "4.3.1+gabcdef12", carrier: "4.3.1+g12345678") == .sameRelease, "hashes do not prove order")
+expect(runtimeCarrierRelation(active: "4.3.1+gabcdef12", carrier: "4.4.0+g12345678") == .upgrade, "new release upgrade")
+expect(runtimeCarrierRelation(active: "", carrier: "unknown") == .unordered, "unknown stays quiet")
+expect(runtimeCarrierRelation(active: "+", carrier: "5.0.0") == .unordered, "malformed stays quiet")
+expect(runtimeCarrierRelation(active: "unknown", carrier: "5.0.0") == .unordered, "unknown installed stays quiet")
 
 let waiting = deriveRuntimePackMenuState(
   generation: nil, signedSourceRevision: nil, runtimeReady: false)

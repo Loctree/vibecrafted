@@ -19,12 +19,15 @@ import tarfile
 from pathlib import Path
 
 import pytest
+
 from scripts import vetcoders_install as installer
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACK_INSTALLER = REPO_ROOT / "scripts/install-runtime-pack.sh"
 FOUNDATIONS = REPO_ROOT / "scripts/install-foundations.sh"
-POLICY = REPO_ROOT / "vibecrafted-app/shell-agent/app/Vibecrafted/ServerMenuPolicy.swift"
+POLICY = (
+    REPO_ROOT / "vibecrafted-app/shell-agent/app/Vibecrafted/ServerMenuPolicy.swift"
+)
 COMPONENTS = REPO_ROOT / "config/source-components.json"
 
 DARWIN_ONLY = pytest.mark.skipif(
@@ -51,7 +54,9 @@ def _last_line(stream: str) -> str:
 # --- S1 / G3: flag arity of the carrier installer ------------------------------
 
 
-def _run_pack_installer(tmp_path: Path, *flags: str) -> subprocess.CompletedProcess[str]:
+def _run_pack_installer(
+    tmp_path: Path, *flags: str
+) -> subprocess.CompletedProcess[str]:
     pack = tmp_path / "Vibecrafted_RuntimePack_test.tar.gz"
     pack.write_bytes(b"")
     return subprocess.run(
@@ -110,7 +115,7 @@ def _legacy_frame_receipt(tmp_path: Path) -> tuple[Path, Path, Path, dict, dict]
     generation_bin.mkdir(parents=True)
     launcher_home = tmp_path / "launchers"
     shim = _executable(
-        launcher_home / "vc-frame", "#!/bin/sh\nexec 4.5.4-generation/vc-frame \"$@\"\n"
+        launcher_home / "vc-frame", '#!/bin/sh\nexec 4.5.4-generation/vc-frame "$@"\n'
     )
     backup = _executable(
         runtime / ".installer-backups/original/vc-frame",
@@ -121,7 +126,13 @@ def _legacy_frame_receipt(tmp_path: Path) -> tuple[Path, Path, Path, dict, dict]
         "owned_symlinks": {},
         "backups": {str(shim): str(backup)},
     }
-    return runtime, generation_bin, launcher_home, receipt, json.loads(json.dumps(receipt))
+    return (
+        runtime,
+        generation_bin,
+        launcher_home,
+        receipt,
+        json.loads(json.dumps(receipt)),
+    )
 
 
 @DARWIN_ONLY
@@ -221,7 +232,9 @@ def _run_frame_target(tmp_path: Path, **extra: str) -> subprocess.CompletedProce
         cwd=REPO_ROOT,
         env={
             "HOME": str(tmp_path / "home"),
-            "PATH": ":".join([str(tmp_path / "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
+            "PATH": ":".join(
+                [str(tmp_path / "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+            ),
             "TMPDIR": str(tmp_path),
             "UV_RELEASE_BASE": f"file://{tmp_path / 'no-uv-release'}",
             "VCFRAME_RELEASE_BASE": f"file://{tmp_path / 'frame-release'}",
@@ -237,7 +250,7 @@ def _run_frame_target(tmp_path: Path, **extra: str) -> subprocess.CompletedProce
 def _legacy_shim(tmp_path: Path) -> Path:
     return _executable(
         tmp_path / "home/.local/bin/vc-frame",
-        "#!/bin/sh\nexec \"$HOME/.local/share/vibecrafted/releases/4.5.4/libexec/vc-frame\" \"$@\"\n",
+        '#!/bin/sh\nexec "$HOME/.local/share/vibecrafted/releases/4.5.4/libexec/vc-frame" "$@"\n',
     )
 
 
