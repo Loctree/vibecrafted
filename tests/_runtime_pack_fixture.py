@@ -20,8 +20,9 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from _apple_trust_fixture import double_apple_trust
+
 from scripts import vetcoders_install as installer
-from tests._apple_trust_fixture import double_apple_trust
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
