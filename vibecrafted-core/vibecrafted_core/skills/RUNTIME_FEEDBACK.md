@@ -281,3 +281,19 @@ report_path>`) failed on both codex cuts → each burned a full repair round
   `83ab5fa0`), C1 `impl-260730-053220-84226` (work `68380d9f`, repair
   `impl-260730-055020-09345`). claude/grok cuts A2/A1/B2/C2 all verified
   first-pass.
+
+### 4.6.0 headless workflow defaults to living-tree on the live checkout
+
+- **❌ Wrong:** `vibecrafted workflow grok --file <brief>` under 4.6.0+g44cd82fe
+  launched with `runtime_class: living-tree`. The source worker therefore ran
+  in the integrator's live x9bus checkout while a Swift build-for-testing and
+  install were running there. (Stan, claude-code 33327433, 2026-11-23 ~21:03.)
+  I killed the dispatcher and the grok process after 24 s: no edits, clean tree.
+- **✅ Correct:** Next to a live build, or any time the checkout is shared,
+  pass `--worktree true` (or `--execution-runtime local-worktrees`) to a source
+  worker. Then read `runtime_class` in the launch receipt before awaiting.
+  The relaunch `work-261123-210424-17285` reported `local-worktrees`, a root
+  under `~/.vibecrafted/worktrees/vetcoders/x9bus/2026_1123/` and
+  `baseline_sha 60370501f`.
+- **Evidence:** the launch receipts of both x9bus fiszki chain-drag dispatches,
+  2026-11-23.
