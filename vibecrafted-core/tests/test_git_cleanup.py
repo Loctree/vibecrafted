@@ -132,7 +132,11 @@ def test_branch_cleanup_removes_only_fully_merged_names(repo: Path) -> None:
     }
 
     assert remove_branches(repo, view)["removed"] == ["local:done"]
-    assert _git(repo, "branch", "--format=%(refname:short)").split() == [
+    # An explicit sort: a user's branch.sort (e.g. -committerdate) would move
+    # "unmerged" first whenever its commit lands in a later second than base.
+    assert _git(
+        repo, "branch", "--sort=refname", "--format=%(refname:short)"
+    ).split() == [
         "cut/held",
         "main",
         "release/v1",
