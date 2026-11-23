@@ -54,16 +54,32 @@ def _git_env() -> dict[str, str]:
     }
 
 
-def _run(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    root: Path,
+    *args: str,
+    input: str | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
         cwd=root,
+        input=input,
         capture_output=True,
         text=True,
         errors="surrogateescape",
         check=False,
-        env=_git_env(),
+        env={**_git_env(), **(env or {})},
     )
+
+
+def refuse_repo_env_overrides() -> None:
+    """Refuse to read Git while repository-redirecting variables are exported."""
+    overrides = sorted(_REPO_ENV.intersection(os.environ))
+    if overrides:
+        raise RuntimeError(
+            "unset repository-local Git environment overrides before worktree inspection: "
+            + ", ".join(overrides)
+        )
 
 
 def _required(root: Path, *args: str) -> str:
@@ -315,12 +331,7 @@ def worktree_inventory(
     project: str | Path = ".", *, target: str | None = None
 ) -> dict[str, Any]:
     """Return a read-only, evidence-labelled inventory for one repository."""
-    overrides = sorted(_REPO_ENV.intersection(os.environ))
-    if overrides:
-        raise RuntimeError(
-            "unset repository-local Git environment overrides before worktree inspection: "
-            + ", ".join(overrides)
-        )
+    refuse_repo_env_overrides()
     root = _require_git_root(Path(project).expanduser().resolve())
     target_ref, target_sha = _target(root, target)
     entries = _registered(root)

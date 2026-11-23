@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -21,6 +22,9 @@ def _git(
         capture_output=True,
         text=True,
         check=check,
+        # A read must not rewrite the index of the checkout it describes:
+        # without this, ``git status`` refreshes and writes it.
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
     )
 
 
@@ -735,6 +739,10 @@ def _branches_main(arguments: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     """Expose the original rich repo renderer as a checkout-free executable."""
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] and arguments[0] in ("landed", "gems", "save"):
+        from .git_cli import run
+
+        return run(arguments[0], arguments[1:])
     if arguments[:1] == ["branches"]:
         return _branches_main(arguments[1:])
     worktrees_command = arguments[:1] == ["worktrees"]
@@ -750,7 +758,10 @@ def main(argv: list[str] | None = None) -> int:
             "registrations of directories that are gone. Branches always stay; "
             "--dry-run previews, --yes skips the question, --with-ignored also takes "
             "worktrees holding ignored local files. For merged branches: "
-            "vc-git branches cleanup [--also-remote]."
+            "vc-git branches cleanup [--also-remote]. "
+            "Work families: vc-git landed ADDRESS (did it land, also after squash), "
+            "vc-git gems [search QUERY] (unlanded work, only copies first), "
+            "vc-git save [ADDRESS] --to patch|git-apply|commit|stash (keep it without touching it)."
         ),
     )
     if worktrees_command:
