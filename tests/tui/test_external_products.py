@@ -1,5 +1,6 @@
 """External product resolution is versioned, read-only, and never falls back."""
 
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,6 +68,39 @@ def test_frame_skips_current_generation_and_old_runtime_launchers(
         )
         == good
     )
+
+
+darwin_only = pytest.mark.skipif(sys.platform != "darwin", reason="real codesign")
+# Read at import: the tui conftest scrubs ambient VIBECRAFTED_* before each test.
+SIGNED_FRAME = os.environ.get("VIBECRAFTED_TEST_SIGNED_FRAME", "")
+
+
+@darwin_only
+def test_requirement_text_reaches_the_real_codesign() -> None:
+    """2026-11-23: `-R <text>` was read as a file path, so every frame was refused.
+
+    The mocked tests above never ran codesign. These run the real one: an Apple
+    binary satisfies an Apple requirement, and fails only a requirement it does
+    not meet, never with "invalid requirement specification".
+    """
+    accepted = products._codesign_requirement_check(Path("/bin/ls"), "anchor apple")
+    assert accepted.returncode == 0, accepted.stderr
+    refused = products._codesign_requirement_check(
+        Path("/bin/ls"), 'anchor apple and identifier "io.vetcoders.vc-frame"'
+    )
+    assert refused.returncode != 0
+    assert "invalid requirement" not in refused.stderr
+    assert "failed to satisfy" in refused.stderr
+
+
+@darwin_only
+@pytest.mark.skipif(
+    not SIGNED_FRAME,
+    reason="set VIBECRAFTED_TEST_SIGNED_FRAME to a Developer ID signed vc-frame",
+)
+def test_a_developer_id_frame_is_admitted_by_the_real_codesign() -> None:
+    frame_binary = Path(SIGNED_FRAME)
+    products._require_developer_id(frame_binary, products.PRODUCTS["vc-frame"]["id"])
 
 
 def test_missing_frame_has_one_line_install_hint() -> None:

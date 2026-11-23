@@ -50,6 +50,31 @@ class ProductUnavailable(RuntimeError):
     """A missing or incompatible external product; resolution never downloads it."""
 
 
+def _codesign_requirement_check(
+    path: Path, requirement: str
+) -> subprocess.CompletedProcess[str]:
+    """Verify `path` against inline requirement text.
+
+    codesign reads `-R <text>` as a requirement file path; inline text needs a
+    leading "=". Without it every binary failed with "invalid requirement
+    specification", so no signed vc-frame was ever admitted.
+    """
+    return subprocess.run(
+        [
+            "/usr/bin/codesign",
+            "--verify",
+            "--strict",
+            "-R",
+            f"={requirement}",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
 def _require_developer_id(path: Path, identifier: str) -> None:
     """Bind the signed identifier to Apple's Developer ID certificate chain."""
     requirement = (
@@ -58,13 +83,7 @@ def _require_developer_id(path: Path, identifier: str) -> None:
         "and certificate 1[field.1.2.840.113635.100.6.2.6] exists "
         "and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
     )
-    result = subprocess.run(
-        ["/usr/bin/codesign", "--verify", "--strict", "-R", requirement, str(path)],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    result = _codesign_requirement_check(path, requirement)
     if result.returncode:
         raise ProductUnavailable(
             f"{path} must be {identifier} signed by Developer ID team {TEAM_ID}"
