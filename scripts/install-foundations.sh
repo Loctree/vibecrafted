@@ -141,6 +141,14 @@ detect_arch() {
 
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# Download one release file into a fresh work directory. Success is a
+# non-empty file, not curl's status alone: macOS /usr/bin/curl 8.14 with
+# --retry exits 0 after a failed transfer, which turned a missing asset into
+# a false checksum refusal.
+fetch_release_file() {
+  curl -fsSL --retry 3 "$1" -o "$2" && [[ -s "$2" ]]
+}
+
 is_interactive() { [[ -t 0 && -t 1 ]]; }
 
 # Resolve a working user command first, then this install's private npm fallback.
@@ -734,8 +742,8 @@ install_vcframe() {
 
   local work expected observed digest store staged
   work="$(mktemp -d "${TMPDIR:-/tmp}/vibecrafted-vc-frame.XXXXXX")" || return 1
-  if ! curl -fsSL --retry 3 "$base/$asset" -o "$work/$asset" \
-    || ! curl -fsSL --retry 3 "$base/$asset.sha256" -o "$work/$asset.sha256"; then
+  if ! fetch_release_file "$base/$asset" "$work/$asset" \
+    || ! fetch_release_file "$base/$asset.sha256" "$work/$asset.sha256"; then
     warn "Could not download $asset (+ .sha256) from $base."
     rm -rf "$work"
     return 1
@@ -883,8 +891,8 @@ install_vcterminal() {
 
   local work expected observed app signature shipped staged stage_root
   work="$(mktemp -d "${TMPDIR:-/tmp}/vibecrafted-vc-terminal.XXXXXX")" || return 1
-  if ! curl -fsSL --retry 3 "$base/$asset" -o "$work/$asset" \
-    || ! curl -fsSL --retry 3 "$base/$asset.sha256" -o "$work/$asset.sha256"; then
+  if ! fetch_release_file "$base/$asset" "$work/$asset" \
+    || ! fetch_release_file "$base/$asset.sha256" "$work/$asset.sha256"; then
     warn "Could not download $asset (+ .sha256) from $base."
     rm -rf "$work"
     return 1
@@ -1070,8 +1078,8 @@ install_prview() {
   has_cmd curl || { warn "curl is required to download prview."; return 1; }
   local work expected observed version
   work="$(mktemp -d "${TMPDIR:-/tmp}/vibecrafted-prview.XXXXXX")" || return 1
-  if ! curl -fsSL --retry 3 "$PRVIEW_RELEASE_BASE/$asset" -o "$work/$asset" \
-    || ! curl -fsSL --retry 3 "$PRVIEW_RELEASE_BASE/SHA256SUMS" -o "$work/SHA256SUMS"; then
+  if ! fetch_release_file "$PRVIEW_RELEASE_BASE/$asset" "$work/$asset" \
+    || ! fetch_release_file "$PRVIEW_RELEASE_BASE/SHA256SUMS" "$work/SHA256SUMS"; then
     warn "Could not download $asset from $PRVIEW_RELEASE_BASE."
     rm -rf "$work"
     return 1
