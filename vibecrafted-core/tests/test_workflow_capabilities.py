@@ -330,6 +330,7 @@ def test_provider_rows_cover_the_declarable_agent_universe(
             "model_override",
             "permissions_default",
             "controls",
+            "interactive_verbs",
         }, name
         # An unavailable provider must say why; silence would read as a bug.
         if not provider["available"]:
@@ -429,3 +430,69 @@ def test_human_rendering_lists_providers_and_environments(
     assert "claude" in text
     assert "Fleet Worktrees" in text
     assert "gemini" not in text
+
+
+def test_interactive_verbs_follow_the_launcher_gates(isolated_config: Path) -> None:
+    """A client offers exactly the launchers `init`, `resume` and `fork` accept."""
+    from vibecrafted_core.continuity.capabilities import (
+        SUPPORTED,
+        UNSUPPORTED,
+        capability_for,
+    )
+
+    providers = caps.workflow_capabilities_payload()["providers"]
+
+    forking = set()
+    for name, provider in providers.items():
+        capability = capability_for(name)
+        verbs = provider["interactive_verbs"]
+        assert verbs[0] == "init", name
+        assert ("resume" in verbs) == (capability.interactive_resume == SUPPORTED)
+        assert ("fork" in verbs) == (capability.native_fork != UNSUPPORTED)
+        if "fork" in verbs:
+            forking.add(name)
+    # The same gate `vibecrafted fork` applies; x9bus reads it from here.
+    assert forking == {"claude", "codex", "grok", "kimi"}
+
+
+def test_paths_follow_the_x9run_alias_before_vibecrafted(
+    isolated_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clients read state locations here instead of guessing ~/.vibecrafted."""
+    for key in ("X9RUN_HOME", "X9RUN_RUNTIME_HOME", "X9RUN_LAUNCHER_BIN"):
+        monkeypatch.delenv(key, raising=False)
+    vibecrafted_home = isolated_config / "vc-home"
+
+    paths = caps.workflow_capabilities_payload()["paths"]
+    assert paths["home"] == str(vibecrafted_home)
+    assert paths["control_plane"] == str(vibecrafted_home / "control_plane")
+
+    monkeypatch.setenv("X9RUN_HOME", str(isolated_config / "x9run-home"))
+    monkeypatch.setenv("X9RUN_RUNTIME_HOME", str(isolated_config / "x9run-rt"))
+    monkeypatch.setenv("X9RUN_LAUNCHER_BIN", str(isolated_config / "x9run-bin"))
+    paths = json.loads(json.dumps(caps.workflow_capabilities_payload()))["paths"]
+    assert paths == {
+        "home": str(isolated_config / "x9run-home"),
+        "control_plane": str(isolated_config / "x9run-home" / "control_plane"),
+        "runtime_home": str(isolated_config / "x9run-rt"),
+        "launcher_bin": str(isolated_config / "x9run-bin"),
+    }
+
+
+def test_fork_help_names_exactly_the_forking_agents(isolated_config: Path) -> None:
+    """Help text drifted once (kimi was missing); the gate is the source."""
+    from vibecrafted_core.help_surface import render_root_help
+
+    providers = caps.workflow_capabilities_payload()["providers"]
+    forking = [
+        name
+        for name, record in providers.items()
+        if "fork" in record["interactive_verbs"]
+    ]
+    line = next(
+        line
+        for line in render_root_help("test").splitlines()
+        if line.strip().startswith("fork <agent>")
+    )
+    listed = line.rsplit(":", 1)[1].replace(" ", "").split(",")
+    assert sorted(listed) == sorted(forking)

@@ -13,20 +13,20 @@ past runs. They launch no workflows themselves — that is the job of the
 
 ## Reference table
 
-| Command                              | Purpose                                                        |
-| ------------------------------------ | -------------------------------------------------------------- |
-| `vibecrafted init [agent]`           | Orient an agent in this repo                                   |
-| `vibecrafted status`                 | Today's agent activity                                         |
-| `vibecrafted doctor`                 | Installation health — pass/fail                                |
-| `vibecrafted receipt [--json]`       | Delivery/runtime receipt (source ↔ installed)                  |
-| `vibecrafted settlements <action>`   | Read-only f/x/n ledger query                                   |
-| `vibecrafted update`                 | Update to the latest release                                   |
-| `vibecrafted resume <agent>`         | Continue a stopped run or a provider session                   |
-| `vibecrafted fork <agent>`           | Branch a provider session into a new one (claude, codex, grok) |
-| `vibecrafted resume-session <agent>` | Continue an exact provider session as a tracked run            |
-| `vibecrafted version`                | Print version                                                  |
-| `vibecrafted uninstall`              | Reverse the install                                            |
-| `vibecrafted help [topic\|--all]`    | Command deck · full reference                                  |
+| Command                              | Purpose                                                              |
+| ------------------------------------ | -------------------------------------------------------------------- |
+| `vibecrafted init [agent]`           | Orient an agent in this repo                                         |
+| `vibecrafted status`                 | Today's agent activity                                               |
+| `vibecrafted doctor`                 | Installation health — pass/fail                                      |
+| `vibecrafted receipt [--json]`       | Delivery/runtime receipt (source ↔ installed)                        |
+| `vibecrafted settlements <action>`   | Read-only f/x/n ledger query                                         |
+| `vibecrafted update`                 | Update to the latest release                                         |
+| `vibecrafted resume <agent>`         | Continue a stopped run or a provider session                         |
+| `vibecrafted fork <agent>`           | Branch a provider session into a new one (claude, codex, grok, kimi) |
+| `vibecrafted resume-session <agent>` | Continue an exact provider session as a tracked run                  |
+| `vibecrafted version`                | Print version                                                        |
+| `vibecrafted uninstall`              | Reverse the install                                                  |
+| `vibecrafted help [topic\|--all]`    | Command deck · full reference                                        |
 
 ## Selecting the repository: `--repo`
 

@@ -22,6 +22,8 @@ from __future__ import annotations
 from shutil import which
 from typing import Any
 
+from .continuity.capabilities import SUPPORTED, UNSUPPORTED, capability_for
+from .control_plane import control_plane_home
 from .execution_controls import (
     PERMISSION_POLICIES,
     ExecutionControlsError,
@@ -35,7 +37,12 @@ from .research_config import (
     ResearchAgentSelection,
     resolve_research_runtime_config,
 )
-from .runtime_paths import agent_tool_search_path
+from .runtime_paths import (
+    agent_tool_search_path,
+    vibecrafted_home,
+    vibecrafted_launcher_bin,
+    vibecrafted_runtime_home,
+)
 from .spawn import RUNTIME_POLICIES, agent_cli_name, host_substrate_capabilities
 from .workflow import SUPPORTED_AGENTS
 from .workflows import registry as workflow_registry
@@ -128,6 +135,38 @@ def _control_cells(provider: str) -> list[dict[str, Any]]:
     return cells
 
 
+def interactive_verbs(agent: str) -> list[str]:
+    """The interactive launchers ``agent`` accepts, from the continuity table.
+
+    ``init`` opens every agent. ``resume`` follows the provider's interactive
+    resume support. ``fork`` follows the same native-fork gate that
+    ``vibecrafted fork`` applies, so a client never offers a fork the launcher
+    refuses. Presets built on ``init`` (an operator or partner start prompt)
+    belong to the client, not here.
+    """
+    capability = capability_for(agent)
+    verbs = ["init"]
+    if capability.interactive_resume == SUPPORTED:
+        verbs.append("resume")
+    if capability.native_fork != UNSUPPORTED:
+        verbs.append("fork")
+    return verbs
+
+
+def paths_payload() -> dict[str, str]:
+    """Where this runtime keeps its state, resolved as the launcher resolves it.
+
+    ``X9RUN_*`` wins over ``VIBECRAFTED_*``, which wins over the platform
+    default, so a client reads these instead of guessing ``~/.vibecrafted``.
+    """
+    return {
+        "home": str(vibecrafted_home()),
+        "control_plane": str(control_plane_home()),
+        "runtime_home": str(vibecrafted_runtime_home()),
+        "launcher_bin": str(vibecrafted_launcher_bin()),
+    }
+
+
 def provider_capabilities_payload() -> dict[str, dict[str, Any]]:
     """Per-agent launcher contract: executable, model pin, permission/sandbox cells.
 
@@ -157,6 +196,7 @@ def provider_capabilities_payload() -> dict[str, dict[str, Any]]:
             },
             "permissions_default": default_permissions(agent),
             "controls": _control_cells(agent),
+            "interactive_verbs": interactive_verbs(agent),
         }
     return providers
 
@@ -290,6 +330,7 @@ def workflow_capabilities_payload() -> dict[str, Any]:
         ],
         "providers": provider_capabilities_payload(),
         "environments": environment_capabilities_payload(),
+        "paths": paths_payload(),
     }
 
 

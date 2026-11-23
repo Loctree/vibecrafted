@@ -28,6 +28,9 @@ RETAINED = {
     "CLAUDE_CODE_MESSAGING_SOCKET": "/fixture-bus",
     "CLAUDE_CODE_MESSAGING_TOKEN": "fixture-bus-token",
     "FOUNDER_SHELL_SETTING": "fixture-setting",
+    # x9bus hands a launched agent its bus ticket through the tab environment;
+    # the agent's start hook redeems it, so a birth must carry it through.
+    "X9BUS_LAUNCH_TICKET": "fixture-launch-ticket",
 }
 
 
