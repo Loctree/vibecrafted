@@ -174,3 +174,60 @@ def test_prepare_commit_msg_adds_agent_runtime_trailers(tmp_path: Path) -> None:
     )
 
     assert validation.returncode == 0, validation.stderr
+
+
+_TRAILER_KEYS = ["Authored-By", "session_id", "time", "runtime"]
+
+
+def _trailer_block(text: str) -> list[str]:
+    """The keys of the consecutive lines starting at Authored-By."""
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("Authored-By: "))
+    block = []
+    for line in lines[start:]:
+        if not line.strip():
+            break
+        block.append(line.split(":", 1)[0])
+    return block
+
+
+def test_prepare_commit_msg_writes_one_contiguous_trailer_block(tmp_path: Path) -> None:
+    # The documented shape (commit-msg "Expected shape") is one trailer
+    # paragraph; a blank line between trailers splits it into four.
+    result, msg_file = run_prepare_hook(
+        tmp_path,
+        """
+        [claude/interactive] fix(installer): Keep the trailer block whole
+
+        Explains why the change exists.
+        """,
+        env={"ATUIN_SESSION": "019e953fb11e7da1b8ab298e12710052"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    text = msg_file.read_text(encoding="utf-8")
+    assert _trailer_block(text) == _TRAILER_KEYS
+    assert "Explains why the change exists.\n\nAuthored-By: " in text
+    assert text.endswith("\n") and not text.endswith("\n\n")
+
+
+def test_prepare_commit_msg_extends_an_authored_by_block_already_written(
+    tmp_path: Path,
+) -> None:
+    result, msg_file = run_prepare_hook(
+        tmp_path,
+        """
+        [claude/interactive] fix(installer): Keep the trailer block whole
+
+        Explains why the change exists.
+
+        Authored-By: claude <agents@vetcoders.io>
+
+        """,
+        env={"ATUIN_SESSION": "019e953fb11e7da1b8ab298e12710052"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    text = msg_file.read_text(encoding="utf-8")
+    assert text.count("Authored-By: ") == 1
+    assert _trailer_block(text) == _TRAILER_KEYS
