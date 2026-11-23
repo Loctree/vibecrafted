@@ -662,8 +662,9 @@ helper_argument_count=0
 [[ -n "$app_root" ]] && ((helper_argument_count += 1))
 [[ -n "$terminal_host" ]] && ((helper_argument_count += 1))
 [[ -n "$frame_helper" ]] && ((helper_argument_count += 1))
-if ((helper_argument_count != 0 && helper_argument_count != 3)); then
-  die "--app-root, --terminal-host and --frame-helper must be supplied together"
+if ((helper_argument_count != 0 && helper_argument_count != 3)) \
+  && [[ "$helper_argument_count" != "1" || -z "$app_root" ]]; then
+  die "Pass --app-root alone for an independent-product pack, or all three of --app-root, --terminal-host and --frame-helper for a paired rollback."
 fi
 
 if [[ "$operation" == "uninstall" ]]; then
@@ -941,6 +942,11 @@ fi
 if [[ "$operation" == "install" && -n "$app_root" ]]; then
   app_root="$(cd "$app_root" && pwd -P)" \
     || die "cannot resolve Vibecrafted.app root: $app_root"
+  arguments+=(--app-root "$app_root")
+fi
+# Only the historical v1 rollback supplies both helpers. A B2 carrier has
+# independent products and no libexec helper pair to compare.
+if [[ "$operation" == "install" && "$helper_argument_count" == "3" ]]; then
   terminal_host="$(cd "$(dirname "$terminal_host")" && pwd -P)/${terminal_host##*/}" \
     || die "cannot resolve bundled terminal host"
   frame_helper="$(cd "$(dirname "$frame_helper")" && pwd -P)/${frame_helper##*/}" \
@@ -956,15 +962,12 @@ if [[ "$operation" == "install" && -n "$app_root" ]]; then
   # the bytes differ. A non-Mach-O impostor has no UUID and fails closed.
   PYTHONPATH="$payload_root/vibecrafted-core" "$pack_python" \
     -m vibecrafted_core.runtime_pack_contract helpers-agree \
-    --app-copy "$terminal_host" --pack-copy "${pack_terminal_host}" \
-    || die "App terminal helper disagrees with the signed Runtime Pack"
+    --app-copy "$terminal_host" --pack-copy "${pack_terminal_host}" >&2 \
+    || die "App terminal helper disagrees with the signed Runtime Pack; select the matching app and pack before retrying."
   PYTHONPATH="$payload_root/vibecrafted-core" "$pack_python" \
     -m vibecrafted_core.runtime_pack_contract helpers-agree \
-    --app-copy "$frame_helper" --pack-copy "$payload_root/libexec/vc-frame" \
-    || die "App vc-frame helper disagrees with the signed Runtime Pack"
-  arguments+=(
-    --app-root "$app_root"
-  )
+    --app-copy "$frame_helper" --pack-copy "$payload_root/libexec/vc-frame" >&2 \
+    || die "App vc-frame helper disagrees with the signed Runtime Pack; select the matching app and pack before retrying."
   # helpers-agree already proved App copies match the signed pack. Do not
   # forward --terminal-host/--frame-helper into the installer — that would
   # replace pack Mach-O bytes with the bundle-signed helper.

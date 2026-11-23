@@ -198,7 +198,6 @@ case "reinstall-unresolved", "reinstall-absent", "reinstall-current",
     resolution: resolution, carrierGeneration: "4.3.2+gaaaaaaaa",
     configuration: "Configuration inspection found no changes to make.",
     serviceFailure: scenario == "reinstall-service" ? "receipt admission refused" : nil,
-    canUpgrade: scenario == "reinstall-upgrade",
     explicitRepublish: scenario == "reinstall-republish")
   emit(presentation.title)
   emit(presentation.actionTitle ?? "<none>")
@@ -457,6 +456,8 @@ final class ControllerFixture {
   func currentProductUpdateIdentity() -> Identity {
     Identity(appGeneration: carrier, packGeneration: canonicalInstall?.root.lastPathComponent)
   }
+  // Inert pointer boundary: these scenarios never name a trusted active pointer.
+  func activeRuntimeGenerationLabel() -> String? { nil }
   func applyResolution(_ resolution: RuntimeContract) -> CanonicalRuntimeInstall? {
     if case .ready(let install) = resolution {
       canonicalInstall = install; canonicalRuntimeEnvironment = [:]; return install
@@ -627,9 +628,10 @@ def test_startup_revalidates_before_offering_the_carrier(
 
 
 def test_a_verified_newer_carrier_keeps_the_upgrade_choice(policy_binary: Path) -> None:
+    # The carrier relation, not a caller flag, decides the upgrade (contract I1).
     title, action, detail = _run(policy_binary, "reinstall-upgrade")
-    assert title == "Upgrade the Vibecrafted runtime from this App?"
-    assert action == "Upgrade"
+    assert title == "Upgrade to Vibecrafted 4.3.2?"
+    assert action == "Upgrade to Vibecrafted 4.3.2"
     assert "Installed generation: 4.3.1+gaaaaaaaa" in detail
 
 

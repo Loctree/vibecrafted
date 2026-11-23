@@ -24,6 +24,8 @@ from pathlib import Path
 import pytest
 from vibecrafted_core import runtime_pack_contract
 
+from tests._apple_trust_fixture import doubled_products_source
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = REPO_ROOT / "scripts/install-foundations.sh"
 
@@ -551,13 +553,32 @@ def _frame_store(tmp_path: Path) -> Path:
     return tmp_path / "home/.local/share/vc-frame"
 
 
+def _trusting(tmp_path: Path, *frames: Path) -> dict[str, str]:
+    """Run the installer against a resolver that trusts these fixture frames.
+
+    On macOS the resolver admits a PATH ``vc-frame`` only with the Developer ID
+    signature; unsigned fixture scripts would never reach the branch a test
+    names. Only the listed paths are trusted; any other meets ``codesign``.
+    """
+    source = doubled_products_source(tmp_path / "trusted-source", trusted=frames)
+    return {"VIBECRAFTED_SOURCE": str(source)}
+
+
+def _last_stderr_line(result: subprocess.CompletedProcess[str]) -> str:
+    lines = [line for line in result.stderr.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
 def test_a_compatible_vc_frame_on_path_is_kept(tmp_path: Path) -> None:
     _vcframe_release(tmp_path)
     own = _executable(tmp_path / "bin/vc-frame", "#!/bin/sh\necho 'vc-frame 4.9.1'\n")
 
-    result = _run_frame_installer(tmp_path, REQUIRE_FOUNDATIONS="0")
+    result = _run_frame_installer(
+        tmp_path, REQUIRE_FOUNDATIONS="0", **_trusting(tmp_path, own)
+    )
     output = result.stdout + result.stderr
 
+    assert result.returncode == 0, output
     assert f"vc-frame already installed: {own.resolve()}" in output
     assert not _frame_store(tmp_path).exists()
     assert not (tmp_path / "home/.local/bin/vc-frame").exists()
@@ -569,14 +590,17 @@ def test_a_vc_frame_asset_that_misses_its_sha256_is_refused(tmp_path: Path) -> N
     result = _run_frame_installer(tmp_path)
     output = result.stdout + result.stderr
 
+    # vc-frame is a carrier prerequisite: the refusal is final and its one
+    # actionable sentence is the last line on stderr.
     assert result.returncode == 1, output
-    assert "required foundation failed: vc-frame" in result.stderr
+    last = _last_stderr_line(result)
+    assert last.endswith("Resolve this refusal and retry Upgrade."), output
     assert not (tmp_path / "home/.local/bin/vc-frame").exists()
     assert not _frame_store(tmp_path).exists()
     if target == "unpublished-host":
-        assert "publishes no release asset" in output
+        assert "publishes no release asset" in last
     else:
-        assert "does not match its release .sha256" in output
+        assert "does not match its release .sha256" in last
 
 
 def test_a_matching_vc_frame_asset_still_needs_the_publishers_signature_on_macos(
@@ -625,8 +649,11 @@ def test_vc_frame_never_overwrites_another_install_in_the_launcher_bin(
         tmp_path / "home/.local/bin/vc-frame", "#!/bin/sh\necho 'vc-frame 4.3.3'\n"
     )
 
+    # Trust the foreign file so its version, not its signature, is what refuses.
     result = _run_frame_installer(
-        tmp_path, path=[tmp_path / "home/.local/bin", tmp_path / "bin"]
+        tmp_path,
+        path=[tmp_path / "home/.local/bin", tmp_path / "bin"],
+        **_trusting(tmp_path, foreign),
     )
     output = result.stdout + result.stderr
 
@@ -758,11 +785,16 @@ def _assert_terminal_branch(
     elif state == "unpublished-host":
         assert "vc-terminal publishes no build for macOS/" in output
     elif state == "occupied":
-        assert "is another install; not replacing it" in output
+        # An existing unadmitted app belongs to the user: preserved, never replaced.
+        assert result.returncode == 1, output
+        assert "is not admitted and was preserved" in output
+        assert _last_stderr_line(result).endswith("retry Upgrade."), output
     else:
         assert result.returncode == 1, output
         assert absent_message in output
-        assert "required foundation failed: vc-terminal" in result.stderr
+        assert _last_stderr_line(result).endswith(
+            "Resolve this refusal and retry Upgrade."
+        ), output
         assert not Path("/Applications/vc-terminal.app").exists()
 
 
@@ -979,7 +1011,8 @@ def test_uv_channel_failure_keeps_foundation_admission_explicit(
         tmp_path, "screenscribe", path=[fake_bin], REQUIRE_FOUNDATIONS=required
     )
     assert (result.returncode == 0) == (required == "0")
-    assert "uv failed to install screenscribe from PyPI." in result.stdout
+    # Diagnostics belong on stderr; stdout stays free for machine readers.
+    assert "uv failed to install screenscribe from PyPI." in result.stderr
 
 
 def test_the_default_run_refuses_a_missing_foundation(tmp_path: Path) -> None:
@@ -1115,7 +1148,11 @@ def test_runtime_install_retains_early_failure_evidence(tmp_path: Path) -> None:
 def test_canonical_frame_config_passes_strict_cockpit_gate(
     tmp_path: Path, missing: str | None
 ) -> None:
-    """The shipped Frame-owned layout contract must survive strict install."""
+    """The shipped Frame-owned layout contract must pass the cockpit inspection.
+
+    Real provisioning ends at resolver admission, before the runtime publishes
+    its configuration; the cockpit inspection is the ``--check`` report.
+    """
     source = REPO_ROOT / "vibecrafted-core/vibecrafted_core/config/vc-frame"
     config = tmp_path / "home/.config/vibecrafted/vc-frame"
     for name in ("config.kdl", "vc-composer.sh", "layouts/operator.kdl"):
@@ -1130,17 +1167,24 @@ def test_canonical_frame_config_passes_strict_cockpit_gate(
     elif missing:
         (config / missing).unlink()
     fake_bin = tmp_path / "bin"
-    _executable(fake_bin / "vc-frame", "#!/bin/sh\necho 'vc-frame 4.6.0'\n")
+    frame = _executable(fake_bin / "vc-frame", "#!/bin/sh\necho 'vc-frame 4.6.0'\n")
     _executable(fake_bin / "vc-start")
 
     result = _run_installer(
-        tmp_path, "vc-frame", path=[fake_bin], REQUIRE_FOUNDATIONS="1"
+        tmp_path,
+        "--check",
+        "vc-frame",
+        path=[fake_bin],
+        REQUIRE_FOUNDATIONS="1",
+        **_trusting(tmp_path, frame),
     )
+    output = result.stdout + result.stderr
 
+    assert result.returncode == 0, output
+    assert f"vc-frame already installed: {frame.resolve()}" in output
     if missing:
-        assert result.returncode == 1, result.stdout + result.stderr
-        assert "required foundation failed: vc-frame" in result.stderr
+        assert "cockpit: NOT READY" in result.stderr, output
+        assert "cockpit: READY" not in result.stdout
     else:
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert "cockpit: READY" in result.stdout
+        assert "cockpit: READY" in result.stdout, output
         assert "cockpit: Launchpad layout" in result.stdout

@@ -1882,17 +1882,6 @@ then
 fi
 bootstrap_python_usable=1
 
-# macOS App pairing (side-by-side generation contract, 2026-10-22).
-# The Runtime Pack installer refuses to publish when the fixed host
-# /Applications/Vibecrafted.app carries a different signed vc-terminal than
-# the candidate pack. That refusal is a safety net, not a dead end: on macOS
-# the bootstrap admits the installed App when it matches the channel's pack,
-# and installs the channel's DMG first when it does not. The App install goes
-# through the journaled transaction helper (preflight signature check, prior
-# backup, wait-for-parent, receipt, relaunch) — Frame sessions, PTYs and
-# workers survive; the helper never touches them. Starting a new App
-# generation is Founder-gated and never forced from a bootstrap.
-# shellcheck disable=SC2034  # reserved for the GUI/manifest lane pairing state
 if [[ "$channel_mode" == "1" ]]; then
 
   # Resolve latest version from the channel manifest instead of hard-pinning.
@@ -2069,42 +2058,23 @@ run_candidate_command() {
   exit "$status"
 }
 
-# Install the verified, supplied Runtime Pack without make: the Makefile
-# `install` recipe's two steps, the pack installer (which owns the service
-# reconcile after publication) and the foundations installer. A minimal host
-# then needs only the preflighted prerequisites. tests/tui/test_install_bootstrap.py
-# pins this list against the recipe.
-# Invoked through run_candidate_command "$@", which shellcheck cannot follow:
-# newer releases flag the function (SC2329), older ones its body (SC2317).
-# shellcheck disable=SC2317,SC2329
-# macOS App pairing: when the installed /Applications/Vibecrafted.app already
-# carries the channel pack's signed helpers, pass the --app-root trio so the
-# installer admits the fixed host instead of refusing. When it does not match,
-# install the channel DMG first through the journaled transaction helper, then
-# re-probe. The helper is the sole UI-bundle mutation owner and its refusal is
-# final; the prior App is preserved either way.
-report_external_products() {
-  "$bootstrap_python" -I -B "$candidate_root/vibecrafted-core/vibecrafted_core/external_products.py" status \
-    | "$bootstrap_python" -I -S -c 'import json,sys
-for name,state in json.load(sys.stdin).items():
-    print(name + ": " + state["status"] + ": " + (state.get("path") or state["message"]))'
-}
-
-# Install the verified, supplied Runtime Pack without make: the Makefile
-# `install` recipe's two steps, the pack installer (which owns the service
-# reconcile after publication) and the foundations installer. A minimal host
-# then needs only the preflighted prerequisites. tests/tui/test_install_bootstrap.py
-# pins this list against the recipe.
+# The verified candidate's carrier installer is the single orchestration owner:
+# it provisions external products and publishes the pack. The bootstrap never
+# quits, replaces or relaunches /Applications/Vibecrafted.app; starting a new
+# App generation stays with the App's own Upgrade. Additional command-line
+# foundations are installed only after that handoff.
 # Invoked through run_candidate_command "$@", which shellcheck cannot follow:
 # newer releases flag the function (SC2329), older ones its body (SC2317).
 # shellcheck disable=SC2317,SC2329
 install_selected_runtime_pack() {
+  local foundations=(loctree aicx prview screenscribe vc-frame)
   (cd "$candidate_root" \
     && VIBECRAFTED_RUNTIME_PACK="$selected_runtime_pack" \
       bash scripts/install-runtime-pack.sh \
       --expected-source-revision "$expected_revision") || return $?
+  if [[ "$PLATFORM_OS" == "macos" ]]; then foundations+=(vc-terminal); fi
   (cd "$candidate_root" \
-    && bash scripts/install-foundations.sh loctree aicx prview screenscribe) \
+    && bash scripts/install-foundations.sh "${foundations[@]}") \
     || return $?
 }
 
@@ -2313,18 +2283,13 @@ fi
 # yet. The installer owns that transition under its cross-process lease.
 info "✓ Verified vibecrafted $_installed_version candidate; transactional install is next"
 
-# macOS App pairing (side-by-side generation contract, 2026-10-22): when the
-# installed /Applications/Vibecrafted.app already carries the channel pack's
-# signed helpers, prepare the --app-root trio so install-runtime-pack.sh
-# admits the fixed host instead of refusing. When the App does not match, the
-# channel DMG is installed first through the journaled transaction helper and
-# the pairing is re-probed. Off macOS, or without a verified channel pack,
-# this is a no-op: macos_app_args stays empty.
+# macOS channel bootstrap: the candidate's carrier installer owns provisioning
+# and publication; no bootstrap-side external-product or paired-layout verdict
+# applies, and the installed App is left alone.
 if [[ "$PLATFORM_OS" == "macos" && "$channel_mode" == "1" && -n "$selected_runtime_pack" && "$use_gui" != "1" ]]; then
   if [[ "$installer_output" == "1" ]]; then
     installer_stage 2 "Install Vibecrafted and command-line tools"
   fi
-  report_external_products || die "Could not inspect external terminal/frame products"
 fi
 
 

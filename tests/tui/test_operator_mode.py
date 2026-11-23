@@ -13,6 +13,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from tests._apple_trust_fixture import bind_apple_trust_in_copy
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELPER_SCRIPT = (
     REPO_ROOT
@@ -362,6 +364,12 @@ def test_compiled_vc_start_enters_lobby_through_bundled_shell(tmp_path: Path) ->
         ignore=shutil.ignore_patterns("__pycache__", "runtime", "skills", "config"),
     )
     shutil.copytree(core_source / "runtime", core_target / "runtime")
+    # The PATH Frame below cannot carry the Developer ID signature; only this
+    # generation copy's resolver trusts it, and only it.
+    bind_apple_trust_in_copy(
+        core_target / "external_products.py",
+        trusted=(home / ".local" / "bin" / "vc-frame",),
+    )
     # Explicit synthetic generation identity, independent of editable/source Git.
     for version_file in (generation / "VERSION", core_target / "VERSION"):
         version_file.write_text("0.0.0+g00000000\n", encoding="utf-8")

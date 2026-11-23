@@ -3769,7 +3769,8 @@ def test_request_uninstall_run_stop_signals_swarm_process_group(
 @pytest.mark.skipif(
     sys.platform != "darwin", reason="independent Darwin product commands"
 )
-@pytest.mark.parametrize("name", ["vc-terminal", "vc-frame"])
+# vc-frame has its own Darwin handoff (S4), proved below.
+@pytest.mark.parametrize("name", ["vc-terminal"])
 @pytest.mark.parametrize("replacement", ["same", "file", "symlink"])
 def test_retired_independent_product_command_is_receipt_gated(
     tmp_path, name, replacement
@@ -3818,3 +3819,72 @@ def test_retired_independent_product_command_is_receipt_gated(
         assert stale.read_text() == external
         assert stale.is_symlink() == (replacement == "symlink")
         assert str(backup) in receipt["drift_backup_history"][str(stale)]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin vc-frame handoff (S4)")
+@pytest.mark.parametrize("admitted", [False, True])
+@pytest.mark.parametrize("replacement", ["same", "file", "symlink"])
+def test_retired_vc_frame_shim_hands_its_name_only_to_the_admitted_product(
+    tmp_path, replacement, admitted
+):
+    """The old runtime's vc-frame shim is never reclaimed without an admitted Frame.
+
+    With one, an owned shim takes the admitted product in a single rename; a
+    name the user moved on keeps its bytes. Either way the old claim and its
+    collision backup stop being uninstall authority, and the backup survives.
+    """
+    runtime = tmp_path / "runtime"
+    generation_bin = runtime / "releases/new/bin"
+    generation_bin.mkdir(parents=True)
+    launcher_home = tmp_path / "launchers"
+    stale = launcher_home / "vc-frame"
+    _write_executable(stale, "#!/bin/sh\necho old-runtime-wrapper\n")
+    digest = installer._sha256_path(stale)
+    backup = runtime / ".installer-backups/original/prior-product"
+    original = "#!/bin/sh\necho prior-independent-product\n"
+    _write_executable(backup, original)
+    receipt = {
+        "owned_files": {str(stale): digest},
+        "owned_symlinks": {},
+        "backups": {str(stale): str(backup)},
+    }
+    previous = json.loads(json.dumps(receipt))
+    external = "#!/bin/sh\necho new-independent-product\n"
+    if replacement == "file":
+        stale.write_text(external)
+    elif replacement == "symlink":
+        target = tmp_path / "new-product/vc-frame"
+        _write_executable(target, external)
+        stale.unlink()
+        stale.symlink_to(target)
+    frame = tmp_path / "store/4.6.0-abc/vc-frame"
+    _write_executable(frame, "#!/bin/sh\n")
+    before = stale.read_text()
+
+    retired = installer._reclaim_foreign_launcher_names(
+        generation_bin,
+        launcher_home,
+        runtime_home=runtime,
+        receipt=receipt,
+        previous=previous,
+        admitted_frame=frame if admitted else None,
+    )
+
+    assert backup.read_text() == original
+    if not admitted:
+        # No admitted product: nothing moves and the old claim stays intact.
+        assert retired == []
+        assert stale.read_text() == before
+        assert receipt["owned_files"] == previous["owned_files"]
+        assert receipt["backups"] == previous["backups"]
+        return
+    assert str(stale) not in receipt["owned_files"]
+    assert str(stale) not in receipt["owned_symlinks"]
+    assert str(stale) not in receipt["backups"]
+    assert str(backup) in receipt["drift_backup_history"][str(stale)]
+    if replacement == "same":
+        assert stale.is_symlink()
+        assert stale.resolve() == frame.resolve()
+    else:
+        assert stale.read_text() == external
+        assert stale.is_symlink() == (replacement == "symlink")

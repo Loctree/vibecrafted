@@ -34,8 +34,18 @@ func runtimePackMatchesCarrier(generation: String, signedSourceRevision: String)
 func deriveRuntimePackMenuState(
   generation: String?,
   signedSourceRevision: String?,
-  runtimeReady: Bool
+  runtimeReady: Bool,
+  outdatedGeneration: String? = nil,
+  carrierGeneration: String? = nil
 ) -> RuntimePackMenuState {
+  if let outdated = outdatedGeneration, !outdated.isEmpty {
+    let version = carrierGeneration.map(runtimeGenerationVersion) ?? "this App's runtime"
+    return RuntimePackMenuState(
+      header: "Runtime Pack: \(outdated)",
+      detail: "Older than this App — Upgrade to Vibecrafted \(version) is available",
+      health: .neutral,
+      actionsEnabled: true)
+  }
   guard runtimeReady else {
     return RuntimePackMenuState(
       header: "Runtime Pack: WAITING FOR RUNTIME",
@@ -101,31 +111,23 @@ func runtimeIdentityBlob(
   return lines.joined(separator: "\n")
 }
 
-/// A verified installation may be usable without matching this signed App.
-/// Offer its carrier explicitly, without treating a hash as an ordering proof.
+/// A verified installation may be usable without matching this signed App,
+/// and an outdated one is not usable from it at all. Offer the carrier
+/// explicitly in both cases, without treating a hash as an ordering proof.
 /// Startup passes its presentation latch; an explicit repair can ask again.
 func shouldOfferRuntimeCarrier(
   resolution: RuntimeResolution<String>, signedSourceRevision: String?,
   alreadyOffered: Bool = false
 ) -> Bool {
-  guard !alreadyOffered, case .ready(let generation) = resolution,
-    !generation.isEmpty, let source = signedSourceRevision, !source.isEmpty
-  else { return false }
-  return !runtimePackMatchesCarrier(generation: generation, signedSourceRevision: source)
-}
-
-/// Only a strictly newer release can trigger an upgrade offer. Different hashes
-/// of the same version have no ordering proof here; explicit republish remains
-/// available and the installer retains the authoritative downgrade tripwire.
-func shouldOfferRuntimeUpgrade(installed: String, carrier: String) -> Bool {
-  func release(_ generation: String) -> [Int]? {
-    guard let version = generation.split(separator: "+", maxSplits: 1, omittingEmptySubsequences: false).first else { return nil }
-    let parts = version.split(separator: ".", omittingEmptySubsequences: false)
-    guard parts.count == 3 else { return nil }
-    let values = parts.compactMap { Int($0) }
-    return values.count == 3 && values.allSatisfy { $0 >= 0 } ? values : nil
+  guard !alreadyOffered else { return false }
+  switch resolution {
+  case .outdated:
+    return true
+  case .ready(let generation):
+    guard !generation.isEmpty, let source = signedSourceRevision, !source.isEmpty
+    else { return false }
+    return !runtimePackMatchesCarrier(generation: generation, signedSourceRevision: source)
+  case .absent, .unusable:
+    return false
   }
-  guard !installed.isEmpty, !carrier.isEmpty,
-    let current = release(installed), let candidate = release(carrier) else { return false }
-  return current.lexicographicallyPrecedes(candidate)
 }

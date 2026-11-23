@@ -373,9 +373,11 @@ def test_no_host_python_or_swift_cold_channel_install(
     )
     assert events.index("notarized") < events.index("carrier-python")
     assert events.index("carrier-python") < events.index("runtime-published")
-    # External terminal/frame products are reported as prerequisites; whether
-    # they are present depends on the host, so only the report is asserted.
-    assert "vc-frame: " in result.stdout and "vc-terminal: " in result.stdout
+    # The carrier installer is the one terminal/frame provisioning owner (I6):
+    # the bootstrap prints no pre-provisioning product verdict of its own,
+    # which would report as missing what the carrier is about to install.
+    assert "vc-frame: " not in result.stdout
+    assert "vc-terminal: " not in result.stdout
     # No App transaction: nothing published to /Applications, no receipt.
     assert not destination.exists()
     assert "opened" not in events
