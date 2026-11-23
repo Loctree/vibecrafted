@@ -67,6 +67,13 @@ from _runtime_pack_fixture import (
     private_native_copy,
 )
 
+_GENERATION_FIXTURE_SPEC = importlib.util.spec_from_file_location(
+    "tui_generation_fixture", Path(__file__).with_name("_generation_fixture.py")
+)
+assert _GENERATION_FIXTURE_SPEC is not None and _GENERATION_FIXTURE_SPEC.loader
+gen = importlib.util.module_from_spec(_GENERATION_FIXTURE_SPEC)
+_GENERATION_FIXTURE_SPEC.loader.exec_module(gen)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_CORE_DIR = REPO_ROOT / "vibecrafted-core"
 RUNTIME = SOURCE_CORE_DIR / "vibecrafted_core" / "runtime"
@@ -688,6 +695,9 @@ class Scene:
         )
         for verb in ("vc-start", "vibecrafted"):
             _write(generation / "bin" / verb, "#!/bin/bash\nexit 0\n")
+        # On Darwin the shell asks the generation's product resolver, not
+        # libexec; the double answers from the stand-in engines above.
+        gen.install_product_resolver(generation)
         return generation
 
     def env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -3624,6 +3634,7 @@ def test_workshop_missing_destination_prepares_in_background_and_switches_once(
     for key, value in inherited.to_env().items():
         monkeypatch.setenv(key, value)
     (scene.generation / "VERSION").write_text("4.4.0+g00000000\n")
+    (scene.generation / "bin" / "python3").unlink()
     (scene.generation / "bin" / "python3").symlink_to(sys.executable)
     _write(
         scene.owner,

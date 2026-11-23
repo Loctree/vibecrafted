@@ -362,6 +362,9 @@ def test_compiled_vc_start_enters_lobby_through_bundled_shell(tmp_path: Path) ->
         core_source,
         core_target,
         ignore=shutil.ignore_patterns("__pycache__", "runtime", "skills", "config"),
+        # The fixture generation already carries a resolver double there; the
+        # real resolver from this copy replaces it.
+        dirs_exist_ok=True,
     )
     shutil.copytree(core_source / "runtime", core_target / "runtime")
     # The PATH Frame below cannot carry the Developer ID signature; only this
