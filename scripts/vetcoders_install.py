@@ -21109,38 +21109,46 @@ def _reconcile_runtime_preference(
             else:
                 manifest, manifest_error = _load_runtime_generation_manifest(old_root)
                 if manifest is None:
-                    raise ValueError(
-                        manifest_error or "previous generation manifest is invalid"
-                    )
-                raw = baseline_source.read_bytes()
-                digest = hashlib.sha256(raw).hexdigest()
-                expected_digest = (
-                    old.get("sha256")
-                    or manifest["hashes"].get(relative.as_posix())
-                    or previous.get("owned_files", {}).get(str(destination))
-                )
-                bound_digest = manifest["hashes"].get(relative.as_posix())
-                trusted = bool(expected_digest) and digest == expected_digest
-                if bound_digest and digest != bound_digest:
-                    trusted = False
-                if trusted:
-                    baseline = raw.decode("utf-8")
-                elif choice in PREFERENCE_CHOICES:
-                    # Historical receipts omit hashes for some preference files,
-                    # and some generations hold user copies of those defaults.
-                    # Unproven bytes cannot be a three-way baseline; a bound
-                    # keep-current/use-incoming retry still resolves the user file.
-                    baseline = None
-                elif expected_digest and digest != expected_digest:
-                    raise ValueError(
-                        "previous shipped defaults differ from their receipt"
-                    )
-                elif bound_digest and digest != bound_digest:
-                    raise ValueError(
-                        "previous shipped defaults differ from their manifest"
-                    )
+                    # An older generation's closed manifest predates this schema, so
+                    # its bytes prove no baseline. That leaves the user's file
+                    # unresolved, not unresolvable: identical bytes need no merge,
+                    # and a bound keep-current/use-incoming still decides the file.
+                    if current_raw == incoming.encode("utf-8"):
+                        baseline = incoming
+                    elif choice not in PREFERENCE_CHOICES:
+                        raise ValueError(
+                            manifest_error or "previous generation manifest is invalid"
+                        )
                 else:
-                    raise ValueError("previous shipped defaults are unavailable")
+                    raw = baseline_source.read_bytes()
+                    digest = hashlib.sha256(raw).hexdigest()
+                    expected_digest = (
+                        old.get("sha256")
+                        or manifest["hashes"].get(relative.as_posix())
+                        or previous.get("owned_files", {}).get(str(destination))
+                    )
+                    bound_digest = manifest["hashes"].get(relative.as_posix())
+                    trusted = bool(expected_digest) and digest == expected_digest
+                    if bound_digest and digest != bound_digest:
+                        trusted = False
+                    if trusted:
+                        baseline = raw.decode("utf-8")
+                    elif choice in PREFERENCE_CHOICES:
+                        # Historical receipts omit hashes for some preference files,
+                        # and some generations hold user copies of those defaults.
+                        # Unproven bytes cannot be a three-way baseline; a bound
+                        # keep-current/use-incoming retry still resolves the user file.
+                        baseline = None
+                    elif expected_digest and digest != expected_digest:
+                        raise ValueError(
+                            "previous shipped defaults differ from their receipt"
+                        )
+                    elif bound_digest and digest != bound_digest:
+                        raise ValueError(
+                            "previous shipped defaults differ from their manifest"
+                        )
+                    else:
+                        raise ValueError("previous shipped defaults are unavailable")
         current = current_raw.decode("utf-8") if current_raw is not None else None
         if (
             destination.name == "terminal-policy.toml"
@@ -21265,6 +21273,28 @@ def _preference_choice_for_path(
     if destination == selected or destination.name == selected.name:
         return choice
     return None
+
+
+def _carried_preference_choice(
+    binding: Any, destination: Path, incoming_source: Path
+) -> tuple[str | None, str | None, str | None]:
+    """Replay an earlier attempt's bound choice only for unchanged bytes."""
+    if not isinstance(binding, dict) or binding.get("choice") not in PREFERENCE_CHOICES:
+        return None, None, None
+    current_sha256 = binding.get("current_sha256")
+    incoming_sha256 = binding.get("incoming_sha256")
+    try:
+        if (
+            destination.is_symlink()
+            or not destination.is_file()
+            or not incoming_source.is_file()
+            or _sha256_path(destination) != current_sha256
+            or _sha256_path(incoming_source) != incoming_sha256
+        ):
+            return None, None, None
+    except OSError:
+        return None, None, None
+    return binding["choice"], current_sha256, incoming_sha256
 
 
 def _recovery_receipt_snapshot(previous: Mapping[str, Any]) -> dict[str, Any]:
@@ -21413,12 +21443,15 @@ def _abandon_unpublished_preference_conflicts(
     runtime_home: Path,
     receipt: dict[str, Any],
     conflicts: list[dict[str, Any]],
+    resolutions: Mapping[str, Mapping[str, str]] | None = None,
 ) -> bool:
     """Restore a published receipt so a candidate conflict cannot poison it.
 
     `config_conflicts` remains the poison key `runtime-resolve` already
     understands. A refused unpublished upgrade records `candidate_conflicts`
-    instead, which older resolvers ignore.
+    instead, which older resolvers ignore. `candidate_resolutions` keeps the
+    hash-bound choices this attempt accepted, so the next attempt can settle
+    the remaining files instead of asking about the same one again.
     """
     unpublished = bool(receipt.get("install_pending")) or receipt.get(
         "install_phase"
@@ -21434,6 +21467,12 @@ def _abandon_unpublished_preference_conflicts(
         previous_available = False
     receipt.pop("config_conflicts", None)
     receipt["candidate_conflicts"] = conflicts
+    if resolutions:
+        receipt["candidate_resolutions"] = {
+            path: dict(binding) for path, binding in resolutions.items()
+        }
+    else:
+        receipt.pop("candidate_resolutions", None)
     _checkpoint_runtime_install_receipt(runtime_home, receipt)
     return previous_available
 
@@ -21462,12 +21501,24 @@ def _prepare_runtime_preferences(
     """
     prepared: dict[Path, dict[str, Any]] = {}
     conflicts: list[dict[str, Any]] = []
+    carried = previous.get("candidate_resolutions")
+    carried = carried if isinstance(carried, dict) else {}
+    accepted: dict[str, dict[str, str]] = {}
     for destination, relative in _runtime_preference_sources(product_config).items():
         if not (generation / relative).is_file() and sys.platform == "win32":
             continue
         file_choice = _preference_choice_for_path(
             destination, choice=choice, choice_path=choice_path
         )
+        bound_current = expected_current_sha256 if file_choice else None
+        bound_incoming = expected_incoming_sha256 if file_choice else None
+        if file_choice is None:
+            # One choice per attempt is all the App and CLI can send. A choice
+            # an earlier attempt accepted still binds this file, but only while
+            # both the user's bytes and the incoming default are unchanged.
+            file_choice, bound_current, bound_incoming = _carried_preference_choice(
+                carried.get(str(destination)), destination, generation / relative
+            )
         outcome = _reconcile_runtime_preference(
             destination,
             relative,
@@ -21475,8 +21526,8 @@ def _prepare_runtime_preferences(
             runtime_home=runtime_home,
             previous=previous,
             choice=file_choice,
-            expected_current_sha256=expected_current_sha256 if file_choice else None,
-            expected_incoming_sha256=expected_incoming_sha256 if file_choice else None,
+            expected_current_sha256=bound_current,
+            expected_incoming_sha256=bound_incoming,
         )
         if outcome["error"] is not None:
             # Reuse the installer's backup and receipt, without installing a
@@ -21500,11 +21551,18 @@ def _prepare_runtime_preferences(
             "defaults": outcome["defaults"],
             "user_override_keys": outcome["user_override_keys"],
         }
+        if file_choice is not None and bound_current and bound_incoming:
+            accepted[str(destination)] = {
+                "choice": file_choice,
+                "current_sha256": bound_current,
+                "incoming_sha256": bound_incoming,
+            }
     if conflicts:
         previous_available = _abandon_unpublished_preference_conflicts(
             runtime_home=runtime_home,
             receipt=receipt,
             conflicts=conflicts,
+            resolutions=accepted,
         )
         if not previous_available:
             previous_available = _previous_runtime_is_available(runtime_home, previous)

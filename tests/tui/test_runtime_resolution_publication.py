@@ -3799,3 +3799,112 @@ def test_kdl_preference_binding_with_missing_or_changed_baseline(
         if destination.exists()
         else binding == "missing-file"
     )
+
+
+# 2026-11-23, upgrade 4.5.4 -> 4.6.0: the old generation's closed manifest
+# failed this schema, so every present preference raised before a bound
+# choice could decide it, and one choice per attempt could never clear three.
+
+
+def _old_manifest_predates_schema(monkeypatch, old_root: Path) -> None:
+    real = installer._load_runtime_generation_manifest
+
+    def load(generation):
+        if Path(generation) == old_root:
+            return (
+                None,
+                "installed generation manifest does not satisfy the runtime schema",
+            )
+        return real(generation)
+
+    monkeypatch.setattr(installer, "_load_runtime_generation_manifest", load)
+
+
+def _user_preferences(paths: dict) -> dict[str, Path]:
+    product = paths["product_config"]
+    files = {
+        "kdl": product / "vc-frame/config.kdl",
+        "policy": product / "terminal-policy.toml",
+    }
+    files["kdl"].write_bytes(files["kdl"].read_bytes() + b"// my frame\n")
+    files["policy"].write_bytes(files["policy"].read_bytes() + b"# my terminal\n")
+    return files
+
+
+def _bound(conflict, path: Path) -> dict[str, str]:
+    (item,) = [i for i in conflict.envelope["files"] if Path(i["path"]) == path]
+    return {
+        "resolve_preference": "keep-current",
+        "preference_current_sha256": item["current_sha256"],
+        "preference_incoming_sha256": item["incoming_sha256"],
+        "preference_path": str(path),
+    }
+
+
+def _conflict_paths(conflict) -> set[Path]:
+    return {Path(item["path"]) for item in conflict.envelope["files"]}
+
+
+def test_bound_choice_resolves_a_preference_whose_old_manifest_predates_schema(
+    installed, tmp_path, capsys, monkeypatch
+):
+    paths, _, result = installed
+    _old_manifest_predates_schema(monkeypatch, Path(result["root"]))
+    config = paths["product_config"] / "vc-frame/config.kdl"
+    config.write_bytes(config.read_bytes() + b"// my frame\n")
+    user = config.read_bytes()
+    payload_b = seed_runtime_pack(tmp_path / "pack-b", version="9.9.10+b")
+
+    conflict = _install_conflict(payload_b, capsys)
+    assert _conflict_paths(conflict) == {config}
+    _install(payload_b, capsys, **_bound(conflict, config))
+
+    assert config.read_bytes() == user
+    _resolve(paths, capsys, status="ready")
+
+
+def test_several_preference_conflicts_clear_one_bound_choice_per_attempt(
+    installed, tmp_path, capsys, monkeypatch
+):
+    paths, _, result = installed
+    _old_manifest_predates_schema(monkeypatch, Path(result["root"]))
+    files = _user_preferences(paths)
+    user = {name: path.read_bytes() for name, path in files.items()}
+    receipt_path = installer._runtime_receipt_path(paths["runtime_home"])
+    active = (paths["runtime_home"] / "active.json").read_bytes()
+    payload_b = seed_runtime_pack(tmp_path / "pack-b", version="9.9.10+b")
+
+    # Untouched preferences equal the incoming defaults and need no choice.
+    first = _install_conflict(payload_b, capsys)
+    assert _conflict_paths(first) == set(files.values())
+
+    second = _install_conflict(payload_b, capsys, **_bound(first, files["kdl"]))
+    assert _conflict_paths(second) == {files["policy"]}
+    receipt = json.loads(receipt_path.read_text())
+    assert set(receipt["candidate_resolutions"]) == {str(files["kdl"])}
+    assert (paths["runtime_home"] / "active.json").read_bytes() == active
+
+    _install(payload_b, capsys, **_bound(second, files["policy"]))
+    assert {name: path.read_bytes() for name, path in files.items()} == user
+    receipt = json.loads(receipt_path.read_text())
+    assert "candidate_resolutions" not in receipt
+    assert "candidate_conflicts" not in receipt
+    _resolve(paths, capsys, status="ready")
+
+
+def test_a_carried_preference_choice_lapses_when_the_user_file_changes(
+    installed, tmp_path, capsys, monkeypatch
+):
+    paths, _, result = installed
+    _old_manifest_predates_schema(monkeypatch, Path(result["root"]))
+    files = _user_preferences(paths)
+    payload_b = seed_runtime_pack(tmp_path / "pack-b", version="9.9.10+b")
+    first = _install_conflict(payload_b, capsys)
+    second = _install_conflict(payload_b, capsys, **_bound(first, files["kdl"]))
+
+    files["kdl"].write_bytes(files["kdl"].read_bytes() + b"// edited again\n")
+    third = _install_conflict(payload_b, capsys, **_bound(second, files["policy"]))
+
+    # The stale choice is not replayed onto new bytes; the file is asked again.
+    assert _conflict_paths(third) == {files["kdl"]}
+    assert b"edited again" in files["kdl"].read_bytes()
