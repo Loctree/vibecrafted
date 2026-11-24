@@ -125,6 +125,17 @@ znany nieznany, który trzyma cel otwarty. Obcięcie korpusu aicx raportuje
 `sweep` pisze chronologiczne shardy do ekstrakcji. Nic jeszcze nie zostało
 przeczytane.
 
+Kolejny dzień dodawaj przez `append`, nie ponowny `sweep` numerujący shardy od `s01`. Append kopiuje nowe pliki do kolejnych shardów i rozszerza `window.until`. Powtórzenie tych samych plików jest no-op. Ta sama nazwa z innymi bajtami zatrzymuje operację: rozstrzygnij kolizję źródeł ręcznie przed ponowieniem, bez podmiany istniejących rekordów.
+
+Przerwany append zachowuje `.append-transaction.json` i nieopublikowane pliki w `.append-staging`; ponów tę samą komendę, aby wznowić. Używaj jednego zapisującego naraz. `verify-quotes` z samą nową ekstrakcją dopisuje kandydatów do katalogu i zachowuje ID; zmieniony kandydat z istniejącym ID zatrzymuje weryfikację. `merge` zachowuje wcześniejsze werdykty i overrides przy dostarczeniu tylko nowych shardów werdyktów.
+
+```bash
+uv run "$CLI" "$W" append --until 2026-11-03
+uv run "$CLI" "$W" plan --stage extract --repo <repo> --shard s09
+```
+
+Jeśli przerwanego append nie da się wznowić, użyj `append --abort`, aby zarchiwizować oczekującą transakcję i nieopublikowany staging w katalogu roboczym. Opublikowane shardy pozostają. Katalog obsługuje jednego zapisującego. Istniejące ID kandydata są fail-closed dla wszystkich pól; ręczna rewizja metadanych wymaga jawnego rozstrzygnięcia.
+
 ### 2 · Ekstrakcja — flota czyta, dosłownie
 
 ```bash

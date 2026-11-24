@@ -23,8 +23,11 @@ mkdir -p "$destination/lib"
 install -m 0755 "$SCRIPT_DIR/install-runtime-pack.sh" "$destination/install-runtime-pack.sh"
 # Carry the whole library tree, including helpers added in future releases.
 # Source snapshots need not contain Git metadata. Preserve executable modes.
-COPYFILE_DISABLE=1 tar --exclude=.DS_Store -cf - -C "$SCRIPT_DIR" lib \
-  | tar -xf - -C "$destination"
+# Copy with cp, not `tar | tar`: macOS BSD tar can fail the writer with
+# "Write error" / EPIPE once the reader has already closed the pipe, and
+# `set -o pipefail` turns that race into a hard failure of the kit.
+COPYFILE_DISABLE=1 cp -R "$SCRIPT_DIR/lib/." "$destination/lib/"
+find "$destination/lib" -name .DS_Store -delete
 install -m 0644 \
   "$REPO_ROOT/vibecrafted-core/vibecrafted_core/trust/vibecrafted-signing-v1.pub" \
   "$destination/vibecrafted-signing-v1.pub"

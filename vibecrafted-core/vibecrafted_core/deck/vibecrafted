@@ -2199,6 +2199,26 @@ def process_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    # A zombie still answers kill(pid, 0). In the installer's PID namespace the
+    # init process does not reap it, so a dead server looks live and its
+    # /proc identity no longer matches the process we started. Hosts without
+    # procfs (macOS) have nothing further to say: the signal probe stands.
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return True
+    stat = proc / str(pid) / "stat"
+    try:
+        raw = stat.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    closing = raw.rfind(")")
+    if closing < 0:
+        return True
+    fields = raw[closing + 2 :].split()
+    if fields and fields[0] in {"Z", "X"}:
+        return False
     return True
 
 
@@ -3010,6 +3030,36 @@ def lock_owner_digest(payload: dict[str, object]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def lifecycle_lock_holder_state(lock_dir: Path) -> bool | None:
+    """Whether a live owner still holds the lifecycle flock.
+
+    ``True`` means a holder process has the exclusive flock, so the owner is
+    alive even when a PID-namespace ``/proc`` read says otherwise. ``False``
+    means the holder file exists and the flock is free, so the owner has
+    exited even if its zombie still answers ``kill``. ``None`` means this lock
+    has no holder file and the caller must use the process snapshot.
+    """
+    held = lock_dir / "held"
+    try:
+        descriptor = os.open(held, os.O_RDWR)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        fail(f"cannot inspect lifecycle lock holder {held}: {exc}", 75)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in {errno.EAGAIN, errno.EWOULDBLOCK}:
+                return True
+            fail(f"cannot probe lifecycle lock holder {held}: {exc}", 75)
+        else:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            return False
+    finally:
+        os.close(descriptor)
+
+
 def open_lifecycle_recovery_guard(path: Path) -> int:
     flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
     try:
@@ -3433,12 +3483,53 @@ elif operation == "lock-owner-write":
             "process": lock_process_snapshot(pid),
         },
     )
+elif operation == "lock-mkdir":
+    # The lifecycle lock is claimed by creating its directory. Only the
+    # kernel's mkdir(2) is exclusive: uutils mkdir(1) (Ubuntu 26.04's
+    # /usr/bin/mkdir) checks exists() first and then maps a lost race's EEXIST
+    # to success, so two racing shells both "won" and shared the lock.
+    try:
+        os.mkdir(Path(args[0]))
+    except FileExistsError:
+        raise SystemExit(1)
+    except OSError as exc:
+        fail(f"cannot create lifecycle lock directory {args[0]}: {exc}", 1)
+elif operation == "lock-hold":
+    held_path = Path(args[0])
+    ready_path = Path(args[1])
+    owner_pid = int(args[2])
+    if owner_pid <= 1:
+        fail("lifecycle lock holder requires a real owner pid", 75)
+    descriptor = os.open(held_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        temporary = ready_path.with_name(
+            f".{ready_path.name}.tmp.{os.getpid()}"
+        )
+        temporary.write_text("held\n", encoding="utf-8")
+        os.replace(temporary, ready_path)
+        # SIGKILL skips the owner's EXIT trap. Keep the flock until the
+        # owner pid is gone, not until our parent changes: backgrounding
+        # the helper inserts a subshell that outlives that owner.
+        while True:
+            try:
+                os.kill(owner_pid, 0)
+            except ProcessLookupError:
+                break
+            except PermissionError:
+                pass
+            time.sleep(0.05)
+    finally:
+        os.close(descriptor)
 elif operation == "lock-state":
     path = Path(args[0])
     try:
         payload = read_lock_owner(path)
         pid, nonce = validate_lock_owner(payload)
-        if not process_alive(pid):
+        holder_state = lifecycle_lock_holder_state(path.parent)
+        if holder_state is True:
+            print(f"live:{pid}")
+        elif holder_state is False or not process_alive(pid):
             print(f"stale:{pid}:{nonce}:{lock_owner_digest(payload)}")
         else:
             try:
@@ -3457,7 +3548,12 @@ elif operation == "lock-state":
                     print(f"live:{pid}")
     except SystemExit as exc:
         if exc.code == 5:
-            print("invalid")
+            # The directory is published before owner.json so the holder can
+            # take the flock first. A missing owner is not corrupt evidence.
+            if not path.is_file() and path.parent.is_dir():
+                print("initializing")
+            else:
+                print("invalid")
         else:
             raise
 elif operation == "lock-reclaim":
@@ -3506,7 +3602,11 @@ elif operation == "lock-reclaim":
         ):
             print("changed")
             raise SystemExit(0)
-        if process_alive(pid):
+        holder_state = lifecycle_lock_holder_state(lock_dir)
+        if holder_state is True:
+            print("held")
+            raise SystemExit(0)
+        if holder_state is not False and process_alive(pid):
             try:
                 current_process = lock_process_snapshot(pid)
             except SystemExit:
@@ -3553,6 +3653,15 @@ PY
 }
 
 _current_shell_pid() {
+  # The lock and launch witness belong to this shell, not to whatever
+  # process last spawned the helper. A wrapper between the shell and
+  # Python exits before the peer reads the lock, and the peer then
+  # treats a live owner as stale. bash 3 has no BASHPID; ask Python then.
+  _CURRENT_SHELL_PID="${BASHPID:-}"
+  if [[ "$_CURRENT_SHELL_PID" =~ ^[0-9]+$ ]] && \
+    [[ "$_CURRENT_SHELL_PID" -gt 1 ]]; then
+    return 0
+  fi
   local runtime_dir temp_file
   runtime_dir="$(_server_runtime_dir)"
   mkdir -p "$runtime_dir"
@@ -3639,7 +3748,7 @@ _managed_pid_state() {
     printf 'invalid\n'
     return 0
   fi
-  if ! kill -0 "$pid" 2>/dev/null; then
+  if ! kill -0 "$pid" 2>/dev/null || _process_is_reaped_or_zombie "$pid"; then
     printf 'stale\n'
     return 0
   fi
@@ -3696,18 +3805,32 @@ _server_origin() {
   _server_python origin "${1:-}" "${2:-}"
 }
 
+_process_is_reaped_or_zombie() {
+  local pid="${1:-}" stat_line state
+  # No procfs means we cannot see a zombie. Do not treat every live
+  # macOS process as reaped.
+  [[ -d /proc ]] || return 1
+  [[ -d "/proc/$pid" ]] || return 0
+  stat_line="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
+  [[ -n "$stat_line" ]] || return 1
+  state="${stat_line##*)}"
+  state="${state#"${state%%[![:space:]]*}"}"
+  state="${state%% *}"
+  [[ "$state" == "Z" || "$state" == "X" ]]
+}
+
 _wait_for_pid_exit() {
   local pid="${1:-}"
   local ticks="${2:-50}"
   local elapsed=0
   while [[ "$elapsed" -lt "$ticks" ]]; do
-    if ! kill -0 "$pid" 2>/dev/null; then
+    if ! kill -0 "$pid" 2>/dev/null || _process_is_reaped_or_zombie "$pid"; then
       return 0
     fi
     sleep 0.1
     elapsed=$((elapsed + 1))
   done
-  ! kill -0 "$pid" 2>/dev/null
+  ! kill -0 "$pid" 2>/dev/null || _process_is_reaped_or_zombie "$pid"
 }
 
 _cleanup_managed_evidence() {
@@ -3852,6 +3975,9 @@ _stop_managed_process() {
   fi
 
   if _wait_for_pid_exit "$pid" "${VIBECRAFTED_STOP_TERM_WAIT_TICKS:-50}"; then
+    # A PID-namespace init does not reap our children. wait collects the
+    # zombie so a later kill probe sees the process gone.
+    wait "$pid" 2>/dev/null || true
     _cleanup_managed_evidence "$role" "$pid"
     printf "%b✓%b %s stopped.\n" "$_green" "$_reset" "$label"
     return 0
@@ -3875,8 +4001,52 @@ _stop_managed_process() {
       "$_red" "$_reset" "$label" "$pid" >&2
     return 1
   fi
+  wait "$pid" 2>/dev/null || true
   _cleanup_managed_evidence "$role" "$pid"
   printf "%b✓%b %s stopped.\n" "$_green" "$_reset" "$label"
+}
+
+_start_server_lifecycle_lock_holder() {
+  local lock_dir="${1:-}" ready spins=0
+  ready="$lock_dir/holder.ready"
+  rm -f "$ready"
+  _SERVER_LIFECYCLE_LOCK_HOLDER=""
+  _server_python lock-hold "$lock_dir/held" "$ready" \
+    "$_SERVER_LIFECYCLE_LOCK_PID" &
+  _SERVER_LIFECYCLE_LOCK_HOLDER=$!
+  while [[ ! -s "$ready" && "$spins" -lt 500 ]]; do
+    if ! kill -0 "$_SERVER_LIFECYCLE_LOCK_HOLDER" 2>/dev/null; then
+      wait "$_SERVER_LIFECYCLE_LOCK_HOLDER" 2>/dev/null || true
+      _SERVER_LIFECYCLE_LOCK_HOLDER=""
+      return 1
+    fi
+    sleep 0.02
+    spins=$((spins + 1))
+  done
+  [[ -s "$ready" ]]
+}
+
+_stop_server_lifecycle_lock_holder() {
+  local pid="${_SERVER_LIFECYCLE_LOCK_HOLDER:-}" spins=0
+  [[ -n "$pid" ]] || return 0
+  _SERVER_LIFECYCLE_LOCK_HOLDER=""
+  kill "$pid" 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null && [[ "$spins" -lt 20 ]]; do
+    sleep 0.05
+    spins=$((spins + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
+_discard_server_lifecycle_lock_dir() {
+  local lock_dir="${1:-}"
+  [[ -n "$lock_dir" ]] || return 0
+  _stop_server_lifecycle_lock_holder
+  rm -f "$lock_dir/owner.json" "$lock_dir/held" "$lock_dir/holder.ready"
+  rmdir "$lock_dir" 2>/dev/null || true
 }
 
 _acquire_server_lifecycle_lock() {
@@ -3890,12 +4060,22 @@ _acquire_server_lifecycle_lock() {
   _current_shell_pid || return 1
   _SERVER_LIFECYCLE_LOCK_PID="$_CURRENT_SHELL_PID"
   _SERVER_LIFECYCLE_LOCK_DIR="$lock_dir"
+  _SERVER_LIFECYCLE_LOCK_HOLDER=""
 
   while [[ "$attempts" -lt "${VIBECRAFTED_LIFECYCLE_LOCK_TICKS:-100}" ]]; do
-    if mkdir "$lock_dir" 2>/dev/null; then
+    # Never trust mkdir(1)'s exit status here: uutils mkdir reports success
+    # to the loser of a concurrent create. The helper calls mkdir(2) directly.
+    if _server_python lock-mkdir "$lock_dir" 2>/dev/null; then
+      # Publish the flock before owner.json. A peer that only sees the
+      # directory waits; once the owner record exists, the flock proves this
+      # shell is alive even if /proc calls the pid a zombie.
+      if ! _start_server_lifecycle_lock_holder "$lock_dir"; then
+        _discard_server_lifecycle_lock_dir "$lock_dir"
+        return 1
+      fi
       if ! _server_python lock-owner-write \
         "$owner_file" "$_SERVER_LIFECYCLE_LOCK_PID" "$_SERVER_LIFECYCLE_LOCK_NONCE"; then
-        rmdir "$lock_dir" 2>/dev/null || true
+        _discard_server_lifecycle_lock_dir "$lock_dir"
         return 1
       fi
       return 0
@@ -3904,9 +4084,14 @@ _acquire_server_lifecycle_lock() {
     case "$state" in
       live:*)
         invalid_attempts=0
+        attempts=0
         sleep 0.05
         ;;
-      initializing|invalid)
+      initializing)
+        invalid_attempts=0
+        sleep 0.05
+        ;;
+      invalid)
         invalid_attempts=$((invalid_attempts + 1))
         if [[ "$invalid_attempts" -lt 20 ]]; then
           sleep 0.05
@@ -3930,6 +4115,10 @@ _acquire_server_lifecycle_lock() {
           if [[ "$reclaim_result" == reclaimed:* ]]; then
             printf "Recovered stale server lifecycle lock; retained owner evidence at %s.\n" \
               "${reclaim_result#reclaimed:}"
+          elif [[ "$reclaim_result" == "held" ]]; then
+            invalid_attempts=0
+            attempts=0
+            sleep 0.05
           elif [[ "$reclaim_result" != "changed" ]]; then
             printf "%b✗%b Lifecycle lock recovery returned an invalid result; refusing mutation.\n" \
               "$_red" "$_reset" >&2
@@ -3957,15 +4146,18 @@ _acquire_server_lifecycle_lock() {
 }
 
 _release_server_lifecycle_lock() {
-  local owner_file
+  local owner_file lock_dir
   [[ -n "${_SERVER_LIFECYCLE_LOCK_DIR:-}" ]] || return 0
-  owner_file="$_SERVER_LIFECYCLE_LOCK_DIR/owner.json"
+  lock_dir="$_SERVER_LIFECYCLE_LOCK_DIR"
+  owner_file="$lock_dir/owner.json"
   if _server_python lock-owned \
     "$owner_file" "$_SERVER_LIFECYCLE_LOCK_PID" "$_SERVER_LIFECYCLE_LOCK_NONCE" \
     >/dev/null 2>&1; then
-    rm -f "$owner_file"
-    rmdir "$_SERVER_LIFECYCLE_LOCK_DIR" 2>/dev/null || true
+    rm -f "$owner_file" "$lock_dir/held" "$lock_dir/holder.ready"
+    rmdir "$lock_dir" 2>/dev/null || true
+    _stop_server_lifecycle_lock_holder
   else
+    _stop_server_lifecycle_lock_holder
     printf "%b✗%b Lifecycle lock ownership changed; retaining evidence at %s\n" \
       "$_red" "$_reset" "$owner_file" >&2
     return 1
@@ -3985,7 +4177,10 @@ _server_lifecycle_lock_is_owned() {
 
 _with_server_lifecycle_lock() (
   _acquire_server_lifecycle_lock || exit $?
-  trap '_release_server_lifecycle_lock' EXIT
+  # Cleanup must not replace cmd_server's status. set -e treats a failed
+  # command in the EXIT trap as the subshell status, so a healthy start
+  # can exit 1 with nothing on stderr.
+  trap '_release_server_lifecycle_lock || true' EXIT
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -4473,16 +4668,31 @@ cmd_server() {
       if _server_python health-wait "$host" "$port" "$server_pid" "15" \
         > /dev/null 2> "$health_error"; then
         current_state="$(_managed_pid_state "$pid_file" "server")"
-        if [[ "$current_state" == "foreign" ]] && \
-          _capture_managed_identity server "$server_pid" "$server_nonce" \
+        # A loaded PID namespace can make one /proc read disagree with the
+        # snapshot just published. Recapture while the process is still the
+        # one we started; a zombie or a reaped pid is not republished.
+        local identity_attempt=0
+        while [[ "$current_state" != "live" && "$identity_attempt" -lt 20 ]]; do
+          if ! kill -0 "$server_pid" 2>/dev/null || \
+            _process_is_reaped_or_zombie "$server_pid"; then
+            break
+          fi
+          if _capture_managed_identity server "$server_pid" "$server_nonce" \
             "$server_bin" "$server_bin" \
             > /dev/null 2> "$identity_error"; then
-          rm -f "$identity_error"
+            rm -f "$identity_error"
+          fi
           current_state="$(_managed_pid_state "$pid_file" "server")"
-        fi
+          identity_attempt=$((identity_attempt + 1))
+          [[ "$current_state" == "live" ]] || sleep 0.05
+        done
         if [[ "$current_state" != "live" ]]; then
-          printf "%b✗%b Server became healthy but its managed identity could not be verified.\n" \
-            "$_red" "$_reset" >&2
+          local identity_detail=""
+          if [[ -s "$identity_error" ]]; then
+            identity_detail="$(tail -n 1 "$identity_error" 2>/dev/null || true)"
+          fi
+          printf "%b✗%b Server became healthy but its managed identity could not be verified.%s\n" \
+            "$_red" "$_reset" "${identity_detail:+ $identity_detail}" >&2
           if _stop_launch_owned_process \
             server Server "$server_pid" "$server_launcher_pid" "$server_nonce"; then
             _server_python update-status "$status_file" "failed" "none"

@@ -13,11 +13,11 @@ name: Install (Linux Matrix)
 # likely failure mode for a real Debian user.
 
 on:
+  # Branch pushes with an open PR are already covered by pull_request; only
+  # main gets a push run so the default branch keeps its own signal.
   push:
     branches:
       - main
-      - develop
-      - "release/*"
   pull_request:
     branches:
       - main
@@ -32,6 +32,12 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  # One live run per PR: a new push to the PR cancels the superseded run.
+  # Push/tag/dispatch/merge-queue runs get a unique group and are never cancelled.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   linux-runtime-pack:

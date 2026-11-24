@@ -998,7 +998,12 @@ def test_public_live_child_resolves_exact_run_and_native_session(
     leaf = None
     while time.monotonic() < deadline:
         for path in home.rglob("*marbles-L1.meta.json"):
-            leaf = json.loads(path.read_text())
+            # A path seen by rglob can be gone or partially written by the
+            # time it is read while the child starts; keep polling.
+            try:
+                leaf = json.loads(path.read_text())
+            except (FileNotFoundError, json.JSONDecodeError):
+                continue
             if leaf.get("agent_session_id"):
                 break
         if leaf and leaf.get("agent_session_id"):
