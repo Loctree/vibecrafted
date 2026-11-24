@@ -211,14 +211,10 @@ jobs:
             export VC_RELEASE_KEY
             VC_RELEASE_KEY="$(mktemp "$RUNNER_TEMP/linux-release-key.XXXXXX")"
             trap 'rm -f "$VC_RELEASE_KEY"' EXIT
-            python3 - <<'PY_KEY'
-            import os
-            from pathlib import Path
-            secret = os.environ.get("VC_RELEASE_SIGNING_KEY", "")
-            if not secret:
-                raise SystemExit("configured product signing key is unavailable")
-            Path(os.environ["VC_RELEASE_KEY"]).write_text(secret, encoding="ascii")
-            PY_KEY
+            # printf, not a nested heredoc: bash parses << even in a branch
+            # this rehearsal run does not take, and an indented terminator
+            # never closes. '%s' keeps the PEM bytes unchanged.
+            printf '%s' "$VC_RELEASE_SIGNING_KEY" > "$VC_RELEASE_KEY"
             unset VC_RELEASE_SIGNING_KEY
             openssl dgst -sha256 -sign "$VC_RELEASE_KEY" -out "$pack.sig" "$pack"
             rm -f "$VC_RELEASE_KEY"
