@@ -76,29 +76,11 @@ That override is recorded on the launch receipt and never rewrites the trust jou
    falsifies fairness **truth**; guard may refuse when trust has blocked
    the line for fairness or completeness failures.
 
-## Gate inventory (named, not reimplemented)
+## Gate Inventory & Fairness / Settlement Relation
 
-| Gate                       | Phase    | Mode                                          |
-| -------------------------- | -------- | --------------------------------------------- |
-| `commit-msg`               | commit   | hard — format + trailers + ban vendor footers |
-| `prepare-commit-msg`       | commit   | helper — fill trailers                        |
-| `pre-commit`               | commit   | hard — ruff/prettier/semgrep family           |
-| `pre-push`                 | push     | hard — push-time gates                        |
-| `loctree-first`            | agent    | policy — map before rummage                   |
-| `classifier-hard-stops`    | dispatch | policy — AUTONOMY buttons                     |
-| `commit-msg-diff-advisory` | commit   | advisory seed — claim vs staged pack          |
-| `trust-block-dispatch`     | dispatch | hard — this skill's proof path                |
+`vc-guard` inventories the eight existing gates across commit, push, agent, and dispatch phases (`commit-msg`, `prepare-commit-msg`, `pre-commit`, `pre-push`, `loctree-first`, `classifier-hard-stops`, `commit-msg-diff-advisory`, `trust-block-dispatch`) without reimplementing them, and stops dispatch on lines where `vc-trust` recorded a fairness or completeness block.
 
-Coverage gaps (honest): fleet-wide hook seeding, elevating diff-gate to hard,
-PATH/install drift, per-branch line policy beyond HEAD default.
-
-## Relation to agent fairness and f/x/n completeness
-
-- **Living Tree** allows parallel commits; fairness claims must still hold.
-- **commit-msg** makes the message machine-legal.
-- **vc-trust** falsifies whether the legal message is true (fairness +
-  completeness + runtime claims) and writes settlement.
-- **vc-guard** stops the fleet from continuing on a line trust has blocked.
+Full gate inventory table, honest coverage gaps, and the `Living Tree` / `commit-msg` / `vc-trust` / `vc-guard` relationship: [references/gate-inventory.md](references/gate-inventory.md).
 
 ## Hard boundary
 

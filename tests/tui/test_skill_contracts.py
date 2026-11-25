@@ -371,3 +371,25 @@ def test_scaffold_places_one_goal_after_purpose_with_name_and_endpoint(
     ).read_text(encoding="utf-8")
     errors = goal_acceptance_errors(generated, "vc-goalprobe")
     assert not errors, "\n".join(errors)
+
+
+def test_all_shipped_skills_respect_12k_char_cap_and_have_references() -> None:
+    """Every shipped EN and PL skill stays <= 12,000 chars and ships references/."""
+    store = REPO_ROOT / "vibecrafted-core" / "vibecrafted_core" / "skills"
+    skill_files = [
+        p for p in sorted(store.glob("**/SKILL.md")) if "experimental" not in p.parts
+    ]
+    assert skill_files, "No shipped SKILL.md files discovered"
+    violations: list[str] = []
+    for skill_md in skill_files:
+        text = skill_md.read_text(encoding="utf-8")
+        if len(text) > 12_000:
+            violations.append(
+                f"{skill_md.relative_to(REPO_ROOT)}: {len(text)} chars > 12000"
+            )
+        refs_dir = skill_md.parent / "references"
+        if not refs_dir.is_dir() or not any(refs_dir.iterdir()):
+            violations.append(
+                f"{skill_md.parent.relative_to(REPO_ROOT)}: missing or empty references/"
+            )
+    assert not violations, "\n".join(violations)

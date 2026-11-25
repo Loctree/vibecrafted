@@ -126,64 +126,17 @@ Contract: [`../vc-dou/references/public-surface-floor.md`](../vc-dou/references/
 
 If any plane is missing, call it out explicitly and block release unless the user knowingly accepts the risk.
 
-## Artifact Canon
+## Artifact Canon, Deployment Topology & Proxy Defaults
 
-**Git/versioning:** tag exact commit (`git tag -a v1.2.3 -m "Release 1.2.3"`), push (`git push origin v1.2.3`), mandatory changelog, published version matches repo/badges/docs/website refs.
+Tag the exact commit, keep changelog and registry outputs aligned with boring descriptive artifact names, and pick the smallest honest stack (Caddy, Nginx, or Docker). Bind services to `127.0.0.1` by default, terminate TLS at an intentional reverse proxy preserving `Host`/forwarding/websocket headers, inject secrets at runtime, and require `/health` plus non-root containers.
 
-**Published outputs:** npm (`npm publish` after version bump), crates.io (`cargo publish`), PyPI (wheel + sdist), GitHub Release (attach exact artifacts with boring descriptive filenames), Docker (tag exact version, optionally `latest` — never ship `latest` alone as identity).
-
-**Artifact naming:** `myapp-v1.2.3-linux-x86_64.tar.gz` (good) vs `release.zip` (bad).
-
-## Deployment Topology
-
-Pick one intentionally:
-
-- **Caddy** — solo/small team, few simple upstreams, automatic HTTPS. Default for MVP web apps, landing+app proxy.
-- **Nginx** — already operating it confidently, advanced reverse-proxy needs, many upstreams. For established ops stacks, larger web/API estates.
-- **Docker** — reproducibility, heterogeneous environments, portable preview/staging/prod.
-
-**Safe ladder:** simplest real launch → static hosting or Caddy. App + worker + db → Docker + reverse proxy. Mature infra → Nginx or platform standard. Choose the smallest honest stack, not what sounds impressive.
-
-## Deployment Safety Defaults
-
-- Bind app services to `127.0.0.1` by default; document every `0.0.0.0` exception
-- Terminate TLS at a deliberate proxy/ingress; prefer reverse proxy over raw port exposure
-- Internal Docker network over host-published ports for private services
-- Environment injection at runtime, never secrets baked into images
-- Require `/health` endpoint, graceful shutdown, non-root containers, `.dockerignore` with no secrets
-
-**Red flags:** admin/debug panel bound publicly; public service on `:3000`/`:5173`/`:8000` without proxy/TLS; `CORS *` on authenticated APIs; stacktraces or framework banners exposed; `.env` or backup files web-accessible.
-
-## Reverse Proxy and Exposure
-
-Minimum reverse-proxy expectations:
-
-- `Host` and forwarding headers preserved intentionally
-- websocket upgrade support if the app needs it
-- sane timeout and body-size settings
-- redirect `www`/apex according to canonical decision
-- 80 -> 443 redirect when public HTTPS is intended
-
-Public internet exposure is a decision, not a default.
+Full canon, safe ladder, safety defaults, red flags, and reverse-proxy rules: [references/deployment-and-proxy.md](references/deployment-and-proxy.md).
 
 ## Semgrep Release Gate
 
-Semgrep is part of the canon. Not optional. Release report must carry the evidence.
+Semgrep is part of the canon (not optional): run `make semgrep` against the full repo before release, classify findings by **dataflow boundary**, and block release on any unresolved blocking finding unless the user accepts the risk in writing in the report. If Semgrep is unavailable, state so explicitly, run `uvx semgrep`, and record that the gate was not satisfied.
 
-Canonical command: `make semgrep` (wired same as local pre-commit/pre-push hooks: `semgrep scan --config auto --error --quiet --exclude-rule html.security.audit.missing-integrity.missing-integrity .`). Hooks live in `scripts/hooks/`, activated through `make init-hooks`.
-
-Before release: run `make semgrep` against full repo, record findings (rule id, severity, file, line range), classify by **dataflow boundary** (not file location):
-
-- tainted-path / LFI sinks → fix at validated root object
-- ReDoS-prone regex → bounded parsing or safe shape
-- header/object merge unsafety → explicit allowlist + immutable input boundary
-- command/shell construction → parameterized invocation, never string concatenation across an untrusted seam
-
-Block release on any unresolved blocking finding unless user explicitly accepts risk in writing inside the report.
-
-Minimum classes: auth/authz bypasses, insecure secret handling, shell/command injection, SSRF, path traversal/LFI, unsafe file serving, weak input validation on dangerous sinks, insecure deserialization/eval-like, ReDoS regexes, unsafe header/object merge, framework debug/dev endpoints left enabled.
-
-If Semgrep unavailable, say so explicitly, run `uvx semgrep` (documented fallback), and record in the report that the gate was not satisfied. Silence is not acceptable.
+Full dataflow-boundary remediation rules and minimum finding classes: [references/semgrep-gate.md](references/semgrep-gate.md).
 
 ## Release Report Contract
 
@@ -195,80 +148,15 @@ Every release report must include these mandatory sections and link back to
 - **Deployment mode decision** — selected topology, proxy/TLS posture, and rollback path.
 - **Post-release install smoke** — cold-path install/run verification from the published artifact.
 
-## Domain, DNS, Verification
+## Domain, Visibility, Onboarding & Post-Release Smoke
 
-If the product has any public surface, verify: domain registered and intended, DNS to correct target, canonical host (
-`www` vs apex), redirects match canonical, TLS resolves cleanly, staging vs prod domains not confused. Also: no stale
-preview domains advertised as primary, no mismatched favicon/title/og:image leaking old identity, no broken
-`/.well-known/*` paths.
+Public surfaces must verify DNS, canonical host redirects, TLS, `.well-known/*` / TXT ownership proofs, crawlable HTML/SSR SEO metadata, `robots.txt`/`sitemap.xml`, cold first-user onboarding, and cold-path smoke checks from the published artifact (never a local checkout or dev branch). Release also requires clear financial/legal readiness and avoiding common release anti-patterns.
 
-Ownership proofs (when public products need them): Search Console, Bing Webmaster, domain TXT/challenge files, Apple/Google ecosystem `.well-known/` endpoints, any challenge-response proofs required by infra/platforms. If domain ownership proof is required and the challenge path is missing, release is not done.
-
-## SEO and Visibility Canon
-
-Visibility is a hard checklist, not nice-to-have.
-
-- **Page-level**: descriptive `<title>`, meta description, one real `<h1>`, crawlable content in initial HTML or
-  truthful fallback, canonical URL, Open Graph + Twitter card tags, correct status code, `noindex` only when
-  intentional.
-- **Site-level**: `robots.txt`, `sitemap.xml`, canonical host strategy, consistent internal linking, no broken
-  docs/marketing links, favicon + social preview assets.
-- **Indexability checks**: `curl` page and verify meaningful content without JS; route not blocked by `robots.txt`; meta
-  robots not `noindex` unless intentional; canonical points to intended public URL.
-- **Domain visibility checks**: docs/landing/CTA all resolve; install instructions point to real public artifacts; social share preview not broken.
-
-If a stranger cannot discover, understand, and try the product quickly, release is incomplete.
-
-## Onboarding Truth
-
-Verify the first-user path: install from published artifacts (not the repo), follow the public quickstart cold, screenshots and demos match reality, app or CLI starts without dev-only assumptions, errors are human-readable.
-
-## Post-Release Smoke Verification
-
-Verify from a **cold path**. The dev machine is not a witness.
-
-Install from the **published artifact** (npm/cargo/PyPI/GitHub Release/Docker registry — never local checkout, never
-side-loaded tarball, never dev branch). Then verify: public URL resolves, TLS valid + matches canonical host, health
-endpoint passes, core action works end to end, docs and CTA links resolve, published version matches running version,
-onboarding screenshots/demos match cold-installer output.
-
-Report must name exact artifact source (registry URL, tag, digest, download URL). "It worked on my repo" does not satisfy this gate.
-
-Every `vc-release` run must produce a report with actual evidence. Cannot honestly say "done" without the four mandatory sections below. If any is missing, release is **blocked** until filled or the user accepts the gap in writing.
+Full checklists for Domain/DNS, SEO & visibility, onboarding truth, cold-path smoke verification, mandatory report breakdown, financial/legal reality, and anti-patterns: [references/visibility-smoke-and-antipatterns.md](references/visibility-smoke-and-antipatterns.md).
 
 > Canonical template: [`references/release-report-template.md`](references/release-report-template.md).
 > Full operator checklist: [`references/release-checklist.md`](references/release-checklist.md).
 > Deployment reality deep-dive: [`references/deployment-reality.md`](references/deployment-reality.md).
-
-## Release Report Contract
-
-**Mandatory sections:**
-
-1. **Security gate** — command run (`make semgrep` or equivalent), exit status and finding count, per-finding classification (rule id, severity, file, line range, dataflow boundary), resolution per finding (fixed in commit X / accepted with reason / deferred with tracking issue), explicit statement when gate was not actually satisfied.
-2. **Exposed surface inventory** — listening ports and bind addresses (default `127.0.0.1`, document every `0.0.0.0`), reverse proxy in front (Caddy/Nginx/cloud LB/none) and where TLS terminates, authentication boundaries per surface, response headers added/stripped at the edge (HSTS, CSP, frame options, CORS allowlist), secret materialization path.
-3. **Deployment mode decision** — chosen topology with justification, why it is the smallest honest fit, rollback story (how to revert without manual heroics).
-4. **Post-release install smoke** — artifact source (registry URL, tag, digest, download URL — never `file://` from working tree), command sequence executed from clean environment, first-run output evidence (exit code, version banner, health check), any drift between documented quickstart and observed behavior.
-
-**Sign-off** only when all four sections are populated and each has objective evidence attached. A green Semgrep gate without exposed-surface inventory is not a sign-off. A topology decision without a smoke run is not a sign-off. Truth is cumulative.
-
-## Financial / Legal Reality
-
-Hosting and bandwidth costs understood, registry/CDN limits known, LICENSE correct, SECURITY.md exists, privacy policy/terms exist if user data is involved. Do not market proprietary as open source. Do not collect data without saying so.
-
-## Anti-Patterns
-
-- Publishing without `vc-dou`
-- Skipping hydration and assuming users will figure it out
-- No Semgrep or equivalent security gate
-- Exposing services on `0.0.0.0` without deliberate proxy/TLS design
-- Broken canonical domain or redirect logic
-- Forgetting verification challenge files / TXT records
-- Shipping a JS-only empty shell that crawlers cannot understand
-- Tagging without a changelog
-- Tagging without a GitHub Release (`vc-release --floor --require-release` stays red)
-- Calling the ship done while `vc-release --floor` exits `1`
-- Deploying without post-release smoke checks
-- Treating release as one-time ceremony instead of repeatable discipline
 
 ## Final Principle
 
