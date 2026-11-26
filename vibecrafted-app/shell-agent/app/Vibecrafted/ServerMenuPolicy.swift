@@ -689,33 +689,70 @@ func isTracebackScaffolding(_ line: String) -> Bool {
 
 /// Drop interpreter frames, keep what the owner actually said.
 ///
-/// A frame is followed by the source line it points at, so both go: an
-/// operator cannot act on either, and together they crowd out the exception
-/// line that carries the real message. If a payload turns out to be *only*
-/// scaffolding, the last line is kept rather than returning nothing — an empty
-/// diagnostic is worse than a noisy one.
+/// Inside a traceback every indented line is scaffolding: the frame, the
+/// source it points at, the caret tail. Python 3.13 prints a multi-line
+/// statement as several source lines plus a `...<n lines>...` marker, so
+/// skipping "the one line after a frame" let fragments of the installer's own
+/// code into a Founder-facing dialog. The exception line is the first line
+/// back at column zero; indented lines after it are the continuation of its
+/// message and are kept. If a payload turns out to be *only* scaffolding, the
+/// last line is kept rather than returning nothing — an empty diagnostic is
+/// worse than a noisy one.
 func meaningfulOwnerLines(_ text: String) -> [String] {
-  let lines =
-    text
-    .split(whereSeparator: { $0.isNewline })
-    .map { $0.trimmingCharacters(in: .whitespaces) }
-    .filter { !$0.isEmpty }
+  let raw = text.split(whereSeparator: { $0.isNewline }).map(String.init)
   var kept: [String] = []
-  var skipSource = false
-  for line in lines {
+  var inFrames = false
+  for rawLine in raw {
+    let line = rawLine.trimmingCharacters(in: .whitespaces)
+    if line.isEmpty { continue }
     if isTracebackScaffolding(line) {
-      skipSource = line.hasPrefix("File \"")
+      if line == "Traceback (most recent call last):" || line.hasPrefix("File \"") {
+        inFrames = true
+      }
       continue
     }
-    if skipSource {
-      skipSource = false
-      if isTracebackCaret(line) { continue }
-      continue
+    let indented = rawLine.first.map { $0 == " " || $0 == "\t" } ?? false
+    if inFrames {
+      if indented { continue }
+      inFrames = false
     }
-    if isTracebackCaret(line) { continue }
     kept.append(line)
   }
-  return kept.isEmpty ? Array(lines.suffix(1)) : kept
+  if kept.isEmpty, let last = raw.last?.trimmingCharacters(in: .whitespaces), !last.isEmpty {
+    return [last]
+  }
+  return kept
+}
+
+/// What the Founder sees when publishing this App's carrier failed.
+///
+/// The owner refusing an older carrier is not a malfunction: nothing was
+/// changed and the installed runtime is the newer one. It gets a plain
+/// statement and the one move that helps, not a critical alert.
+struct RuntimeReinstallFailurePresentation {
+  let title: String
+  let detail: String
+  let critical: Bool
+}
+
+func runtimeReinstallFailurePresentation(_ description: String)
+  -> RuntimeReinstallFailurePresentation
+{
+  let marker = "refusing to replace a newer active runtime"
+  guard description.contains(marker) else {
+    return RuntimeReinstallFailurePresentation(
+      title: "Vibecrafted could not reinstall its runtime", detail: description, critical: true)
+  }
+  var detail = "Nothing was changed. The installed runtime is newer than the one this App carries."
+  let facts = description.components(separatedBy: " · ").filter {
+    $0.hasPrefix("candidate Runtime Pack")
+  }
+  if let fact = facts.first {
+    detail += "\n\n" + fact.trimmingCharacters(in: CharacterSet(charactersIn: "… "))
+  }
+  detail += "\n\nInstall a newer Vibecrafted App to bring the App and its runtime back in step."
+  return RuntimeReinstallFailurePresentation(
+    title: "This App is older than the installed runtime", detail: detail, critical: false)
 }
 
 /// One short single-line excerpt of what the owner said, for the tray, the
