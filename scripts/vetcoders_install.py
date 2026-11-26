@@ -1542,9 +1542,19 @@ _SHELL_STARTUP_FILES = (
 
 
 def _backup_root(store_path: Path) -> Path:
-    """Root directory under which per-install teardown backups are stored."""
+    """Legacy/install-time backup root; full teardown uses an external root."""
     _ = store_path
     return vibecrafted_backups_home()
+
+
+def _teardown_backup_root() -> Path:
+    """Keep full-uninstall recovery outside every root the uninstall removes."""
+    return Path(
+        os.environ.get(
+            "VIBECRAFTED_TEARDOWN_BACKUP_HOME",
+            str(Path.home() / "Backups" / "Vibecrafted"),
+        )
+    ).expanduser()
 
 
 def _copy_pointer(src: Path, dst: Path) -> None:
@@ -1697,10 +1707,19 @@ def create_teardown_backup(
     if dry_run:
         return timestamp
 
-    backup_root = vibecrafted_backups_home()
+    backup_root = _teardown_backup_root().resolve(strict=False)
+    for record in records:
+        removed = record.path.resolve(strict=False)
+        if backup_root == removed or _is_subpath(backup_root, removed):
+            raise RuntimeError(
+                f"teardown backup root would be consumed with {record.path}: "
+                f"{backup_root}"
+            )
     backup_dir = backup_root / timestamp
     items_dir = backup_dir / "items"
     items_dir.mkdir(parents=True, exist_ok=False)
+    backup_dir.chmod(0o700)
+    items_dir.chmod(0o700)
     manifest_items: list[dict[str, str]] = []
     for index, record in enumerate(records):
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", record.path.name) or "root"
@@ -1732,7 +1751,7 @@ def create_teardown_backup(
 
 def _restore_command(backup_timestamp: str) -> str:
     """Shell command string that re-runs the given backup's self-contained restore script."""
-    script = vibecrafted_backups_home() / backup_timestamp / RESTORE_SCRIPT_FILE
+    script = _teardown_backup_root() / backup_timestamp / RESTORE_SCRIPT_FILE
     return f"python3 {shlex_quote(str(script))}"
 
 
@@ -4430,7 +4449,9 @@ def _runtime_launchctl(
     """Run `launchctl <arguments>` with a minimal, deterministic environment; never raises on
     non-zero exit.
     """
-    launchctl = Path("/bin/launchctl")
+    launchctl = Path(
+        os.environ.get("VIBECRAFTED_LAUNCHCTL", "/bin/launchctl")
+    ).expanduser()
     if not launchctl.is_file():
         raise OSError("macOS runtime handoff requires /bin/launchctl")
     return subprocess.run(
@@ -5029,13 +5050,23 @@ def _darwin_caller_ancestor_pids() -> frozenset[int]:
     return frozenset(ancestors)
 
 
+def _vibecrafted_app_bundle_paths() -> tuple[Path, Path]:
+    """System/user App paths, with an explicit root override for isolated E2E."""
+    system_applications = Path(
+        os.environ.get("VIBECRAFTED_SYSTEM_APPLICATIONS_DIR", "/Applications")
+    ).expanduser()
+    return (
+        system_applications / "Vibecrafted.app",
+        Path.home() / "Applications" / "Vibecrafted.app",
+    )
+
+
 def _owned_runtime_process_roots(*, app_root: Path | None = None) -> tuple[Path, ...]:
     """Canonical executable roots whose live processes belong to this product."""
     roots = [
         vibecrafted_runtime_home() / "releases",
         vibecrafted_tools_home(),
-        Path("/Applications/Vibecrafted.app"),
-        Path.home() / "Applications/Vibecrafted.app",
+        *_vibecrafted_app_bundle_paths(),
     ]
     if app_root is not None:
         roots.append(app_root)
@@ -5361,6 +5392,67 @@ def _retire_stale_framework_generations(
         )
 
 
+def _owned_uninstall_launchagent_paths() -> tuple[Path, ...]:
+    """LaunchAgent plist names reserved for Vibecrafted's own service plane."""
+    if sys.platform != "darwin":
+        return ()
+    folder = Path.home() / "Library" / "LaunchAgents"
+    if not folder.is_dir():
+        return ()
+    prefixes = (
+        "com.vetcoders.vibecrafted",
+        "com.vetcoders.vc-",
+        "io.vetcoders.vibecrafted",
+        "io.vetcoders.vc-",
+    )
+    return tuple(
+        path
+        for path in sorted(folder.iterdir(), key=lambda item: item.name)
+        if path.suffix == ".plist"
+        and path.name.startswith(prefixes)
+        and (path.is_file() or path.is_symlink())
+    )
+
+
+def _best_effort_owned_service_uninstall(
+    shared_home: Path, *, dry_run: bool
+) -> tuple[str, ...]:
+    """Drive service uninstall without asking whether an install handoff is safe."""
+    try:
+        launcher = _runtime_service_launcher(shared_home)
+    except (OSError, subprocess.SubprocessError):
+        launcher = None
+    if launcher is None:
+        return ()
+    if not dry_run:
+        try:
+            _run_runtime_service_command(
+                launcher,
+                shared_home,
+                "service",
+                "uninstall",
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return ("best-effort uninstall of owned runtime service",)
+
+
+def _bootout_owned_uninstall_launchagents(*, dry_run: bool) -> tuple[str, ...]:
+    """Best-effort bootout remains useful when the old status CLI is half-dead."""
+    actions: list[str] = []
+    for path in _owned_uninstall_launchagent_paths():
+        actions.append(f"bootout owned LaunchAgent {path.name.removesuffix('.plist')}")
+        if dry_run:
+            continue
+        try:
+            _runtime_launchctl("bootout", f"gui/{os.getuid()}", str(path))
+        except (OSError, subprocess.SubprocessError):
+            # File removal plus the path-verified process census below are the
+            # postcondition; an absent or malformed old job is not a new refusal.
+            pass
+    return tuple(actions)
+
+
 def _teardown_owned_runtime_for_uninstall(
     shared_home: Path, *, dry_run: bool, app_root: Path | None = None
 ) -> tuple[str, ...]:
@@ -5391,48 +5483,51 @@ def _teardown_owned_runtime_for_uninstall(
         with _inherited_tools_install_lease(descriptor):
             if _runtime_service_has_evidence(shared_home):
                 _assert_runtime_loaded_service_owner(shared_home)
-                snapshot = _runtime_service_snapshot(shared_home)
-                if snapshot is None:
-                    raise OSError(
-                        "runtime service evidence exists but no verified launcher is available"
-                    )
-                launcher, status, pair_state = snapshot
-                if status.installed or status.loaded or status.supervisor_live:
-                    actions.append("stop and uninstall owned runtime service")
-                    if not dry_run:
-                        result = _run_runtime_service_command(
-                            launcher,
-                            shared_home,
-                            "service",
-                            "uninstall",
+                snapshot = None
+                try:
+                    snapshot = _runtime_service_snapshot(shared_home)
+                except (OSError, subprocess.SubprocessError):
+                    # Uncertainty is the expected input to uninstall. Never
+                    # turn an install-readiness exception into a teardown veto.
+                    pass
+                needs_best_effort = snapshot is None
+                if snapshot is not None:
+                    launcher, status, pair_state = snapshot
+                    if status.installed or status.loaded or status.supervisor_live:
+                        actions.append("stop and uninstall owned runtime service")
+                        if not dry_run:
+                            result = _run_runtime_service_command(
+                                launcher,
+                                shared_home,
+                                "service",
+                                "uninstall",
+                            )
+                            if result.returncode != 0:
+                                needs_best_effort = True
+                            else:
+                                try:
+                                    final = _runtime_service_snapshot(shared_home)
+                                except (OSError, subprocess.SubprocessError):
+                                    final = None
+                                if final is None:
+                                    needs_best_effort = True
+                                else:
+                                    _, final_status, final_pair = final
+                                    if (
+                                        final_status.installed
+                                        or not final_status.quiescent
+                                        or final_pair != "stopped"
+                                    ):
+                                        needs_best_effort = True
+                    elif pair_state != "stopped":
+                        needs_best_effort = True
+                if needs_best_effort:
+                    actions.extend(
+                        _best_effort_owned_service_uninstall(
+                            shared_home, dry_run=dry_run
                         )
-                        if result.returncode != 0:
-                            detail = (
-                                result.stderr.strip()
-                                or result.stdout.strip()
-                                or f"exit={result.returncode}"
-                            )
-                            raise OSError(
-                                f"owned runtime service uninstall failed ({detail})"
-                            )
-                        final = _runtime_service_snapshot(shared_home)
-                        if final is None:
-                            raise OSError(
-                                "runtime launcher disappeared before teardown postcondition"
-                            )
-                        _, final_status, final_pair = final
-                        if (
-                            final_status.installed
-                            or not final_status.quiescent
-                            or final_pair != "stopped"
-                        ):
-                            raise OSError(
-                                "owned runtime service remains after uninstall"
-                            )
-                elif pair_state != "stopped":
-                    raise OSError(
-                        "runtime service is unowned but its server pair is not stopped"
                     )
+                actions.extend(_bootout_owned_uninstall_launchagents(dry_run=dry_run))
             retired = _retired_vc_frame_process_census()
             if retired:
                 actions.append(
@@ -16435,8 +16530,7 @@ def _build_uninstall_inventory(
     rc_cleanup_targets: Sequence[Path],
 ) -> list[ManagedPath]:
     """Build the complete uninstall inventory: skills, agent views, helpers, launchers, rc-file
-    edits, logs, staged-tools generations, and everything explicitly preserved (uv tools,
-    operator data, unmanaged siblings).
+    edits, logs, staged-tools generations, and foreign surfaces outside the owned roots.
     """
     records: list[ManagedPath] = []
     seen: dict[str, int] = {}
@@ -16471,27 +16565,18 @@ def _build_uninstall_inventory(
     if shared_home.is_dir():
         for child in sorted(shared_home.iterdir(), key=lambda item: item.name):
             ownership = classify_vibecrafted_home_child(child)
-            if ownership == "runtime-state":
-                add(
-                    ownership,
-                    child,
-                    "remove",
-                    "reproducible Vibecrafted runtime/control state",
-                )
-            elif ownership == "founder-data":
-                add(
-                    ownership,
-                    child,
-                    "preserve",
-                    "Founder data and generated artifacts are retained",
-                )
-            else:
-                add(
-                    ownership,
-                    child,
-                    "preserve",
-                    "unknown state-home child; discovery never assumes ownership",
-                )
+            add(
+                ownership,
+                child,
+                "remove",
+                "Vibecrafted state home; preserved in the external restore kit",
+            )
+        add(
+            "state-home",
+            shared_home,
+            "remove-if-empty",
+            "the complete state home is backed up before removal",
+        )
 
     resolved_store = store_path.resolve(strict=False)
     managed_tools_root = vibecrafted_tools_home().resolve(strict=False)
@@ -16539,14 +16624,14 @@ def _build_uninstall_inventory(
                     add(
                         "tools-sibling",
                         entry,
-                        "preserve",
-                        "not a Vibecrafted-managed payload name",
+                        "remove",
+                        "content inside an owned tools root; externally backed up",
                     )
             add(
                 "tools-root",
                 tools_root,
                 "remove-if-empty",
-                "shared parent remains when unrelated entries exist",
+                "remove after the externally backed-up tools payload is gone",
             )
 
     # `_teardown_owned_runtime_for_uninstall` takes the cross-process install lease
@@ -16570,42 +16655,28 @@ def _build_uninstall_inventory(
                 add(
                     "runtime-bin",
                     child,
-                    "preserve",
-                    "binary ownership is product-managed outside installer state",
+                    "remove",
+                    "Vibecrafted runtime binary; included in the external restore kit",
                 )
         else:
-            add("runtime-bin", runtime_bin, "preserve", "empty runtime binary root")
+            add(
+                "runtime-bin",
+                runtime_bin,
+                "remove-if-empty",
+                "empty runtime binary root",
+            )
 
     runtime_home = vibecrafted_runtime_home()
     if runtime_home.is_dir():
-        # Names the framework itself writes under the runtime home. Discovery by
-        # name keeps this correct for legacy installs whose manifests predate
-        # these payloads entirely (releases/providers/server were invisible to
-        # uninstall until 2026-08-19 and survived every teardown).
-        framework_runtime_names = {
-            "releases",
-            "providers",
-            "server",
-            "active.json",
-            ".DS_Store",
-        }
         for child in sorted(runtime_home.iterdir(), key=lambda item: item.name):
             if child in {vibecrafted_tools_home(), runtime_bin}:
                 continue
-            if child.name in framework_runtime_names:
-                add(
-                    "runtime-data",
-                    child,
-                    "remove",
-                    "framework runtime payload (release/provider/server state)",
-                )
-            else:
-                add(
-                    "runtime-data",
-                    child,
-                    "preserve",
-                    "runtime data is not proven installer-owned",
-                )
+            add(
+                "runtime-data",
+                child,
+                "remove",
+                "runtime payload, receipt, or recovery data; externally backed up",
+            )
         add(
             "runtime-home",
             runtime_home,
@@ -16631,7 +16702,8 @@ def _build_uninstall_inventory(
 
     # Config and macOS surfaces the framework writes outside the runtime home.
     # Discovery by known path, not manifest, so installs that predate manifest
-    # tracking still come off cleanly. Operator secrets (*.env) are preserved.
+    # tracking still come off cleanly. Secrets are copied with private backup
+    # modes, never printed, before the product config root is removed.
     home_dir = Path.home()
     config_root = Path(
         os.environ.get("XDG_CONFIG_HOME", str(home_dir / ".config"))
@@ -16639,15 +16711,12 @@ def _build_uninstall_inventory(
     vib_config = config_root / "vibecrafted"
     if vib_config.is_dir():
         for child in sorted(vib_config.iterdir(), key=lambda item: item.name):
-            if child.suffix == ".env":
-                add("config", child, "preserve", "operator secret env file")
-            else:
-                add("config", child, "remove", "framework-generated configuration")
+            add("config", child, "remove", "product configuration or credentials")
         add(
             "config-root",
             vib_config,
             "remove-if-empty",
-            "kept when operator secrets remain",
+            "all current product configuration is externally backed up",
         )
     add(
         "config",
@@ -16661,13 +16730,26 @@ def _build_uninstall_inventory(
         "remove",
         "framework sidecar wiring (starship/atuin/vc-frame links and .bak snapshots)",
     )
+    add(
+        "runtime-data",
+        xdg_data_home() / "vc-frame",
+        "remove",
+        "Vibecrafted-managed Frame data; included in the external restore kit",
+    )
     if sys.platform == "darwin":
         library = home_dir / "Library"
+        for plist in _owned_uninstall_launchagent_paths():
+            add(
+                "launchagent",
+                plist,
+                "remove",
+                "owned service plist; explicitly booted out before removal",
+            )
         add(
-            "launchagent",
-            library / "LaunchAgents" / "com.vetcoders.vibecrafted-slack-bridge.plist",
+            "runtime-socket",
+            _vc_frame_socket_dir(),
             "remove",
-            "provider service plist; a loaded job ends at logout or explicit bootout",
+            "owned Frame socket namespace after runtime teardown",
         )
         dynamic_profiles = (
             library / "Application Support" / "iTerm2" / "DynamicProfiles"
@@ -16708,12 +16790,14 @@ def _build_uninstall_inventory(
                 "remove",
                 "framework preference domain",
             )
-        add(
-            "app-bundle",
-            Path("/Applications/Vibecrafted.app"),
-            "preserve",
-            "installed from the DMG; remove by dragging to Trash",
-        )
+        for app_bundle in _vibecrafted_app_bundle_paths():
+            add(
+                "app-bundle",
+                app_bundle,
+                "remove",
+                "installed Vibecrafted App; included in the external restore kit",
+                always=True,
+            )
 
     return records
 
@@ -17146,6 +17230,15 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         launchers = _parse_manifest_launchers(state.launcher_entries)
     else:
         launchers = collect_installed_launchers()
+    if state.launcher_entries:
+        known_launchers = {
+            (str(directory), launcher.name) for directory, launcher in launchers
+        }
+        launchers.extend(
+            (directory, launcher)
+            for directory, launcher in collect_installed_launchers()
+            if (str(directory), launcher.name) not in known_launchers
+        )
 
     rc_cleanup_targets = [
         Path.home() / rcname
@@ -17289,7 +17382,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         print(bold("Saving external restore kit..."))
         backup_ts = create_teardown_backup(inventory)
         if backup_ts:
-            print(f"  {OK} {_backup_root(store_path) / backup_ts}")
+            print(f"  {OK} {_teardown_backup_root() / backup_ts}")
         print()
 
     runtime_result = runtime_preview
@@ -17374,7 +17467,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         for record in preserved:
             print(f"  {record.kind}: {record.path} — {record.reason}")
     if backup_ts:
-        backup_path = _backup_root(store_path) / backup_ts
+        backup_path = _teardown_backup_root() / backup_ts
         print(f"Backup preserved: {backup_path}")
         print("Restore:")
         print(f"  {_restore_command(backup_ts)}")
@@ -17411,7 +17504,11 @@ def cmd_restore(args: argparse.Namespace) -> int:
     shared_home = vibecrafted_home()
     store_path = _canonical_store_path(shared_home)
     dry_run = args.dry_run
-    backup_root = _backup_root(store_path)
+    backup_root = _teardown_backup_root()
+    if not (backup_root / "latest").exists():
+        legacy_root = _backup_root(store_path)
+        if legacy_root != backup_root and (legacy_root / "latest").exists():
+            backup_root = legacy_root
 
     print(f"\n{bold('𝚅𝚒𝚋𝚎𝚌𝚛𝚊𝚏𝚝𝚎𝚍. Restore')}\n")
 
