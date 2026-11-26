@@ -1260,6 +1260,7 @@ Targets:
   loctree         Install loctree + loctree-mcp from npm when missing
   aicx            Install aicx / aicx-mcp from npm when missing
   vc-frame        Install vc-frame from its pinned GitHub release when missing, then check the cockpit
+                  (default on macOS; a Linux Runtime Pack carries its own engine)
   vc-terminal     Place vc-terminal.app from its pinned GitHub release when missing (macOS)
   prview          Install prview from its GitHub release when missing
   screenscribe    Install screenscribe from PyPI through uv (fetched when missing) or pipx
@@ -1299,15 +1300,19 @@ enforce_runtime_root_contract || exit 1
 
 # Default: install required foundations
 if (( ${#TARGETS[@]} == 0 )); then
-  TARGETS=("loctree" "aicx" "vc-frame" "agents")
+  TARGETS=("loctree" "aicx" "agents")
   if (( INSTALL_ALL )); then
     TARGETS+=("prview" "sandbox")
   fi
-  # On macOS the runtime opens its sessions in vc-terminal.app, and users
-  # always get the optional iTerm2 plugin prompt; that install function is a
-  # no-op in non-interactive shells.
+  # On macOS vc-frame and vc-terminal are independently released products,
+  # and the runtime opens its sessions in vc-terminal.app; users always get
+  # the optional iTerm2 plugin prompt, a no-op in non-interactive shells.
+  # Elsewhere the Runtime Pack carries the vc-frame engine (libexec) and
+  # publishes its own launcher in the launcher bin. Provisioning a release
+  # there by default met that launcher as "another install" and refused every
+  # fresh Linux install (Install (Linux Matrix), from 09649c28 on).
   if [[ "$(detect_os)" == "macos" ]]; then
-    TARGETS+=("vc-terminal" "iterm2-plugin")
+    TARGETS+=("vc-frame" "vc-terminal" "iterm2-plugin")
   fi
 fi
 

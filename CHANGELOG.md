@@ -11,14 +11,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - Vibecrafted.app and its macOS Runtime Pack no longer bundle vc-terminal,
   vc-frame, or terminal fonts; each product has its own release.
-- The installer installs [vc-frame](https://github.com/Loctree/vc-frame/releases)
+- On macOS the installer installs [vc-frame](https://github.com/Loctree/vc-frame/releases)
   from the release this runtime pins (4.6.0) into
   `~/.local/share/vc-frame/<version>-<digest>/` and links
   `~/.local/bin/vc-frame` to it, after checking the release `.sha256` and, on
   macOS, the Developer ID signature. A compatible vc-frame (4.5.1 or newer,
   below 5.0.0) already on your PATH is kept, and an installation the
   installer does not own is never overwritten. A vc-frame that cannot be
-  installed now fails the install, like Loctree and AICX.
+  installed now fails the install, like Loctree and AICX. On Linux the Runtime
+  Pack still carries the vc-frame engine and publishes its launcher, so a fresh
+  Linux install no longer refuses that launcher as "another install".
 - On macOS the installer places [vc-terminal](https://github.com/Loctree/vc-terminal/releases)
   0.18.0 in `/Applications/vc-terminal.app` from the release this runtime
   pins (Apple silicon), after checking the release `.sha256`, the Developer

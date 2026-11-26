@@ -822,6 +822,40 @@ def test_a_matching_vc_terminal_asset_still_needs_the_publishers_signature(
     )
 
 
+def test_the_default_run_provisions_vc_frame_only_where_it_is_a_separate_product(
+    tmp_path: Path,
+) -> None:
+    """Install (Linux Matrix), 2026-11-20 on: every fresh Linux install refused.
+
+    A Linux Runtime Pack carries the vc-frame engine and publishes its own
+    launcher; the default run also provisioned the GitHub release there and met
+    that launcher as "another install". The default names vc-frame on macOS
+    only, where it is an independently released product.
+    """
+    _vcframe_release(tmp_path)
+    fake_linux = tmp_path / "linux-bin"
+    _executable(
+        fake_linux / "uname",
+        '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;;'
+        ' *) /usr/bin/uname "$@" ;; esac\n',
+    )
+    release = {"VCFRAME_RELEASE_BASE": f"file://{tmp_path / 'frame-release'}"}
+
+    linux = _run_installer(
+        tmp_path, "--check", path=[fake_linux, tmp_path / "bin"], **release
+    )
+    linux_output = linux.stdout + linux.stderr
+    assert "vc-frame" not in linux_output, linux_output
+    assert "vc-terminal" not in linux_output, linux_output
+
+    native = _run_installer(tmp_path, "--check", path=[tmp_path / "bin"], **release)
+    native_output = native.stdout + native.stderr
+    if platform.system() == "Darwin":
+        assert "vc-frame" in native_output, native_output
+    else:
+        assert "vc-frame" not in native_output, native_output
+
+
 def test_the_default_macos_run_includes_vc_terminal(tmp_path: Path) -> None:
     _vcterminal_release(tmp_path)
 
