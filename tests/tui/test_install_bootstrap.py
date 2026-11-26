@@ -790,8 +790,32 @@ def test_source_carrier_preflight_reports_file_and_make_together(
     )
     reported = set(missing_line.removeprefix("Error: missing required tools:").split())
     assert reported == set(missing_tools)
-    assert "build-essential" in result.stderr
+    _assert_make_hint(result.stderr)
     assert "file" in result.stderr
+
+
+def _apt_host() -> bool:
+    """install.sh scopes its hint by the host's own /etc/os-release."""
+    try:
+        release = Path("/etc/os-release").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    ids = {
+        line.split("=", 1)[1].strip().strip('"')
+        for line in release.splitlines()
+        if line.startswith("ID=")
+    }
+    return bool(ids & {"debian", "ubuntu", "linuxmint", "pop", "raspbian"})
+
+
+def _assert_make_hint(stderr: str) -> None:
+    # The fake uname says Linux, but the distro comes from the real host; on
+    # macOS this also runs the preflight under /bin/bash 3.2 and set -u.
+    assert "unbound variable" not in stderr, stderr
+    if _apt_host():
+        assert "build-essential" in stderr, stderr
+    else:
+        assert "via your distro package manager" in stderr, stderr
 
 
 def test_archive_file_route_refuses_without_make_before_download(
@@ -857,7 +881,7 @@ def test_archive_file_route_refuses_without_make_before_download(
 
     assert result.returncode == 1
     assert "missing required tools: make" in result.stderr
-    assert "build-essential" in result.stderr
+    _assert_make_hint(result.stderr)
     assert not capture.exists(), "archive preflight must refuse before any download"
 
 

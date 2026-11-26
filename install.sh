@@ -575,12 +575,13 @@ preflight_pkg_names() {
       apt:make) pkg=build-essential ;;
     esac
     duplicate=0
-    for existing in "${seen[@]}"; do
+    # macOS /bin/bash 3.2 treats an empty array as unbound under set -u.
+    for existing in ${seen[@]+"${seen[@]}"}; do
       [[ "$existing" == "$pkg" ]] && duplicate=1 && break
     done
     [[ "$duplicate" == "1" ]] || { seen+=("$pkg"); tools+=("$pkg"); }
   done
-  (IFS=' '; printf '%s' "${tools[*]}")
+  (IFS=' '; printf '%s' "${tools[*]-}")
 }
 
 # preflight_pkg_hint emits a copy-pasteable install command for the named
