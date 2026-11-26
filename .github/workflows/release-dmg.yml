@@ -30,11 +30,11 @@ on:
       frame_ref:
         description: vc-frame immutable donor revision
         required: false
-        default: 4f689254bd5cad05adee5ab2a8555e9d3b775dfb
+        default: 1c7965a07035aac23c6631711b0f83cbabbb8797
       terminal_ref:
         description: vc-terminal immutable donor revision
         required: false
-        default: 38ef2f918383ca4dde797d22869b619097c81d05
+        default: 83df7ac9107ab1a6ef9eef4e8ed8bdf0b7373f8d
       notarize:
         description: submit to Apple notary (false = sign only)
         type: boolean
@@ -98,15 +98,15 @@ jobs:
       - name: Check out donors (vc-frame, vc-terminal)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: vetcoders/vc-frame
-          ref: ${{ inputs.frame_ref || '4f689254bd5cad05adee5ab2a8555e9d3b775dfb' }}
+          repository: Loctree/vc-frame
+          ref: ${{ inputs.frame_ref || '1c7965a07035aac23c6631711b0f83cbabbb8797' }}
           path: vc-frame
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: vetcoders/vc-terminal
-          ref: ${{ inputs.terminal_ref || '38ef2f918383ca4dde797d22869b619097c81d05' }}
+          repository: Loctree/vc-terminal
+          ref: ${{ inputs.terminal_ref || '83df7ac9107ab1a6ef9eef4e8ed8bdf0b7373f8d' }}
           path: vc-terminal
           fetch-depth: 0
           persist-credentials: false
