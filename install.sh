@@ -564,36 +564,70 @@ detect_linux_distro() {
   esac
 }
 
+# Map CLI tool names to distro package names where they diverge (Debian's
+# `make` lives in build-essential, not a standalone `make` on minimal images).
+preflight_pkg_names() {
+  local tool pkg duplicate existing
+  local -a tools=() seen=()
+  for tool in "$@"; do
+    pkg="$tool"
+    case "$LINUX_PKG_MGR:$tool" in
+      apt:make) pkg=build-essential ;;
+    esac
+    duplicate=0
+    for existing in "${seen[@]}"; do
+      [[ "$existing" == "$pkg" ]] && duplicate=1 && break
+    done
+    [[ "$duplicate" == "1" ]] || { seen+=("$pkg"); tools+=("$pkg"); }
+  done
+  (IFS=' '; printf '%s' "${tools[*]}")
+}
+
 # preflight_pkg_hint emits a copy-pasteable install command for the named
-# missing tool, scoped to the detected Linux package manager. macOS path
+# missing tools, scoped to the detected Linux package manager. macOS path
 # uses brew. On unknown distros, emit a generic message. Idempotent and
 # silent under non-Linux/macOS hosts.
 preflight_pkg_hint() {
-  local missing="$1"
+  local packages
+  packages="$(preflight_pkg_names "$@")"
   case "$PLATFORM_OS" in
     macos)
-      printf '  hint: brew install %s\n' "$missing" >&2
+      printf '  hint: brew install %s\n' "$packages" >&2
       ;;
     linux|wsl)
       case "$LINUX_PKG_MGR" in
         apt)
-          printf '  hint: sudo apt-get update && sudo apt-get install -y %s\n' "$missing" >&2
+          printf '  hint: sudo apt-get update && sudo apt-get install -y %s\n' "$packages" >&2
           ;;
         dnf)
-          printf '  hint: sudo dnf install -y %s\n' "$missing" >&2
+          printf '  hint: sudo dnf install -y %s\n' "$packages" >&2
           ;;
         pacman)
-          printf '  hint: sudo pacman -S --noconfirm %s\n' "$missing" >&2
+          printf '  hint: sudo pacman -S --noconfirm %s\n' "$packages" >&2
           ;;
         *)
-          printf '  hint: install %s via your distro package manager\n' "$missing" >&2
+          printf '  hint: install %s via your distro package manager\n' "$packages" >&2
           ;;
       esac
       ;;
     *)
-      printf '  hint: install %s for your platform\n' "$missing" >&2
+      printf '  hint: install %s for your platform\n' "$packages" >&2
       ;;
   esac
+}
+
+# Name the operator's options when the channel manifest omits a Runtime Pack for
+# this host. The production channel never compiles a pack on the machine.
+runtime_pack_unavailable_message() {
+  local platform="$1"
+  cat <<EOF
+Error: No prebuilt Runtime Pack available for $platform on channel $ref.
+  The production channel does not build a Runtime Pack on your machine.
+  Options:
+    1) Wait for $platform to be published in https://vibecrafted.io/channel/${ref}.json
+    2) Install from a verified portable source tarball instead (needs make on this host):
+         bash install.sh --archive-file /path/to/vibecrafted-…-portable.tar.gz
+EOF
 }
 
 platform_banner() {
@@ -1671,8 +1705,6 @@ if [[ -z "$archive_url" && -z "$archive_file" && -z "$local_carrier_dir" ]]; the
 fi
 detect_platform
 detect_linux_distro
-installer_output_start
-platform_banner
 
 if [[ "$PLATFORM_OS" == "unsupported" ]]; then
   info ""
@@ -1714,7 +1746,7 @@ preflight_require_all() {
   done
   [[ ${#missing[@]} -eq 0 ]] && return 0
   report_error "Error: missing required tools: ${missing[*]}" \
-    "$(preflight_pkg_hint "${missing[*]}" 2>&1)"
+    "$(preflight_pkg_hint "${missing[@]}" 2>&1)"
   exit 1
 }
 
@@ -1764,6 +1796,8 @@ if [[ -n "$archive_url" || -n "$runtime_pack_url" || "$channel_mode" == "1" ]]; 
   preflight_tools+=(curl)
 fi
 preflight_require_all "${preflight_tools[@]}"
+installer_output_start
+platform_banner
 bootstrap_python=""
 staged_channel_app=""
 channel_manifest=""
@@ -1836,7 +1870,7 @@ if [[ "$PLATFORM_OS" == "macos" && "$channel_mode" == "1" ]]; then
     early_pack="$(plutil -extract runtime_pack_url raw -expect string -o - "$tmpdir/channel.json" 2>/dev/null || true)"
     case "${early_pack%%\?*}" in
       */Vibecrafted_RuntimePack_*"-$early_platform.tar.gz") ;;
-      *) die "No prebuilt Runtime Pack available for $early_platform on channel $ref" ;;
+      *) report_error "$(runtime_pack_unavailable_message "$early_platform")"; exit 1 ;;
     esac
   fi
   channel_dmg_url="$(plutil -extract dmg_url raw -expect string -o - "$tmpdir/channel.json")" \
@@ -1937,7 +1971,10 @@ print(pack)
   fi
   [[ -n "$resolved_url" ]] || die "Channel manifest must bind archive_url and runtime_pack_url; refusing the untrusted raw GitHub fallback and incomplete release tuple (W4 release authentication blocker)"
   if [[ -z "$runtime_pack_file" && -z "$runtime_pack_url" ]]; then
-    [[ -n "$resolved_pack_url" ]] || die "No prebuilt Runtime Pack available for $channel_platform on channel $ref; use a matching published Runtime Pack, or pass --archive-file with a verified portable source copy (that route still needs make)"
+    [[ -n "$resolved_pack_url" ]] || {
+      report_error "$(runtime_pack_unavailable_message "$channel_platform")"
+      exit 1
+    }
     runtime_pack_url="$resolved_pack_url"
   fi
   archive_url="$resolved_url"
