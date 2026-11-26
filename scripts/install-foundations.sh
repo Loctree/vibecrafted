@@ -678,6 +678,12 @@ vcframe_release_target() {
   esac
 }
 
+# A Runtime Pack's own launcher (external_products.py owns the rule).
+vcframe_link_is_runtime_launcher() {
+  [[ -n "$FOUNDATIONS_PYTHON" && ( -f "$1" || -L "$1" ) ]] || return 1
+  "$FOUNDATIONS_PYTHON" -I "$EXTERNAL_PRODUCTS" runtime-launcher "$1" >/dev/null 2>&1
+}
+
 # The launcher is ours only when it links into the versioned store.
 vcframe_link_is_managed() {
   local link="$1" target
@@ -713,6 +719,15 @@ install_vcframe() {
     return
   fi
   link="$LAUNCHER_PREFIX/vc-frame"
+  # Off macOS a Runtime Pack carries the vc-frame engine (libexec/vc-frame)
+  # and publishes this launcher in front of it before foundations run. The
+  # resolver skips runtime launchers by design; this one is the runtime's own
+  # frame, not another install. On macOS vc-frame is a separate product.
+  if [[ "$(detect_os)" != "macos" ]] && vcframe_link_is_runtime_launcher "$link"; then
+    ok "vc-frame is carried by the Runtime Pack: $link"
+    if (( CHECK_ONLY )); then vcframe_cockpit_or_hint; return; fi
+    return 0
+  fi
 
   if ! pin="$(source_component vc-frame)" || [[ "$pin" != *" "* ]]; then
     warn "This runtime pins no vc-frame release in $SOURCE_COMPONENTS."
@@ -1260,7 +1275,7 @@ Targets:
   loctree         Install loctree + loctree-mcp from npm when missing
   aicx            Install aicx / aicx-mcp from npm when missing
   vc-frame        Install vc-frame from its pinned GitHub release when missing, then check the cockpit
-                  (default on macOS; a Linux Runtime Pack carries its own engine)
+                  (off macOS a Runtime Pack's own launcher is the frame it carries)
   vc-terminal     Place vc-terminal.app from its pinned GitHub release when missing (macOS)
   prview          Install prview from its GitHub release when missing
   screenscribe    Install screenscribe from PyPI through uv (fetched when missing) or pipx
@@ -1300,19 +1315,15 @@ enforce_runtime_root_contract || exit 1
 
 # Default: install required foundations
 if (( ${#TARGETS[@]} == 0 )); then
-  TARGETS=("loctree" "aicx" "agents")
+  TARGETS=("loctree" "aicx" "vc-frame" "agents")
   if (( INSTALL_ALL )); then
     TARGETS+=("prview" "sandbox")
   fi
-  # On macOS vc-frame and vc-terminal are independently released products,
-  # and the runtime opens its sessions in vc-terminal.app; users always get
-  # the optional iTerm2 plugin prompt, a no-op in non-interactive shells.
-  # Elsewhere the Runtime Pack carries the vc-frame engine (libexec) and
-  # publishes its own launcher in the launcher bin. Provisioning a release
-  # there by default met that launcher as "another install" and refused every
-  # fresh Linux install (Install (Linux Matrix), from 09649c28 on).
+  # On macOS the runtime opens its sessions in vc-terminal.app, and users
+  # always get the optional iTerm2 plugin prompt; that install function is a
+  # no-op in non-interactive shells.
   if [[ "$(detect_os)" == "macos" ]]; then
-    TARGETS+=("vc-frame" "vc-terminal" "iterm2-plugin")
+    TARGETS+=("vc-terminal" "iterm2-plugin")
   fi
 fi
 

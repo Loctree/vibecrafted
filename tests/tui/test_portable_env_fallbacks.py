@@ -70,7 +70,7 @@ def test_install_foundations_default_treats_agent_cli_bootstrap_as_best_effort(
         # aicx_ready probes BOTH binaries; without a fake `aicx` the aicx leg
         # (a channel foundation, hard-fail by default) turns red on hosts
         # without a real aicx on BASE_PATH and hides this test's actual
-        # subjects: the cockpit defer and the best-effort agents leg.
+        # subject: the best-effort agents leg.
         "aicx",
         "aicx-mcp",
         "vc-frame",
@@ -104,13 +104,10 @@ def test_install_foundations_default_treats_agent_cli_bootstrap_as_best_effort(
     )
 
     combined = result.stdout + result.stderr
-    # vc-frame is externally released — and today its repo has no release,
-    # so the default spine must DEFER a failed cockpit install with a loud
-    # warn instead of killing the whole bootstrap (REQUIRE_FOUNDATIONS=1
-    # re-arms the hard gate). The agents leg stays best-effort: its failure
-    # is the warn line below, never the exit code.
+    # The agents leg stays best-effort: its failure is the warn line below,
+    # never the exit code. (vc-frame has a public channel since 09649c28: a
+    # real run provisions or admits it, and the cockpit check is --check only.)
     assert result.returncode == 0, combined
-    assert "cockpit" in combined
     assert (
         "agent CLIs incomplete — optional, install later: vibecrafted doctor"
         in combined

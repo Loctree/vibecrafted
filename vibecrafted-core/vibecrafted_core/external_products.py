@@ -133,6 +133,25 @@ def resolve_terminal() -> Path:
     return path
 
 
+def is_runtime_launcher(candidate: Path, *, runtime: Path | None = None) -> bool:
+    """A Vibecrafted runtime's own vc-frame launcher, never an external product.
+
+    On macOS vc-frame is a separate product and such a launcher only points
+    back into a runtime. A Linux Runtime Pack carries the engine itself and
+    publishes this launcher in front of it.
+    """
+    runtime = (runtime or Path(__file__).resolve().parents[2]).resolve()
+    physical = candidate.resolve()
+    if physical.is_relative_to(runtime):
+        return True
+    with physical.open("rb") as stream:
+        prefix = stream.read(4096)
+    return bool(
+        re.search(rb"(?m)^(?:export )?VIBECRAFTED_RUNTIME_ROOT=", prefix)
+        or b"vc-frame-product-entry.sh" in prefix
+    )
+
+
 def resolve_frame(
     *, search_path: str | None = None, runtime: Path | None = None
 ) -> Path:
@@ -148,20 +167,13 @@ def resolve_frame(
             continue
         try:
             physical = candidate.resolve()
-            if physical.is_relative_to(runtime):
+            # Ignore runtime launchers to prevent recursion or stale engines.
+            if is_runtime_launcher(physical, runtime=runtime):
                 continue
-            # Ignore old runtime launchers to prevent recursion or stale engines.
-            with physical.open("rb") as stream:
-                prefix = stream.read(4096)
         except (OSError, RuntimeError) as exc:
             raise ProductUnavailable(
                 f"cannot inspect vc-frame at {candidate}: {exc}. {FRAME_HINT}"
             ) from exc
-        if (
-            re.search(rb"(?m)^(?:export )?VIBECRAFTED_RUNTIME_ROOT=", prefix)
-            or b"vc-frame-product-entry.sh" in prefix
-        ):
-            continue
         try:
             if sys.platform == "darwin":
                 # Verify before executing an arbitrary PATH occupant.
@@ -207,8 +219,20 @@ def product_status() -> dict[str, dict[str, str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("product", choices=("terminal", "frame", "status"))
+    parser.add_argument(
+        "product", choices=("terminal", "frame", "status", "runtime-launcher")
+    )
+    parser.add_argument(
+        "path", nargs="?", help="runtime-launcher: the vc-frame launcher to classify"
+    )
     args = parser.parse_args()
+    if args.product == "runtime-launcher":
+        if not args.path:
+            parser.error("runtime-launcher needs the launcher path")
+        try:
+            return 0 if is_runtime_launcher(Path(args.path)) else 1
+        except (OSError, RuntimeError):
+            return 1
     try:
         if args.product == "status":
             print(json.dumps(product_status(), sort_keys=True))
