@@ -16,9 +16,11 @@ from pathlib import Path
 import pytest
 from _runtime_pack_fixture import (
     fixed_terminal_fixture,
+    fixture_pack_platform,
     private_child_command,
     private_runtime_pack_seed,
     seed_runtime_pack,
+    write_linux_fixture_inventory,
 )
 
 from scripts import vetcoders_install as installer
@@ -75,12 +77,17 @@ def _seal_runtime_pack_for_admission(payload: Path) -> Path:
         json.dumps(source, ensure_ascii=True, sort_keys=True, indent=2) + "\n",
         encoding="utf-8",
     )
+    # Off Darwin the pack carries both native hosts, which a darwin-* seal
+    # refuses as carried external products; declare the host's own target.
+    pack_platform, architecture = fixture_pack_platform()
+    if pack_platform.startswith("linux-"):
+        write_linux_fixture_inventory(payload, architecture)
     contract.write_provenance(
         payload,
         carrier_basename="Vibecrafted_RuntimePack_rescue-fixture.tar.gz",
         version=(payload / "VERSION").read_text(encoding="utf-8").strip(),
-        platform="darwin-arm64",
-        architecture="arm64",
+        platform=pack_platform,
+        architecture=architecture,
         source_revision=revision,
         terminal_revision="2" * 40,
         frame_revision="3" * 40,

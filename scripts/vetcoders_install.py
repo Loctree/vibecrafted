@@ -25223,6 +25223,9 @@ def _load_local_skill_owner() -> Any:
     module = types.ModuleType("_vc_local_skill_owner")
     module.__file__ = str(module_path)
     source = _capture_runtime_bound_file(module_path)
+    # The code is the bytes captured above from the generation's own owner;
+    # an import loader would reopen the path and write __pycache__ into it.
+    # nosemgrep: python.lang.security.audit.exec-detected.exec-detected
     exec(compile(source, str(module_path), "exec"), module.__dict__)  # noqa: S102
     return module
 

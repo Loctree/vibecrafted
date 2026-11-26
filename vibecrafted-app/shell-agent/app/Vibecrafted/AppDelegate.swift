@@ -2348,10 +2348,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
         }
         // The installer's own last line, verbatim. A refused publication
         // touched no prior runtime, so nothing this App holds is changed here.
+        // An owner refusing this App's older carrier is a fact, not a crash:
+        // it reads calm and names the one move that helps.
+        let refusal = runtimeReinstallFailurePresentation(error.localizedDescription)
         let failure = NSAlert()
-        failure.alertStyle = .critical
-        failure.messageText = presentation.failureTitle
-        failure.informativeText = error.localizedDescription
+        failure.alertStyle = refusal.critical ? .critical : .warning
+        failure.messageText = refusal.critical ? presentation.failureTitle : refusal.title
+        failure.informativeText = refusal.detail
         failure.addButton(withTitle: "OK")
         failure.runModal()
       case .success(let install):

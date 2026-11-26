@@ -18,7 +18,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   macOS, the Developer ID signature. A compatible vc-frame (4.5.1 or newer,
   below 5.0.0) already on your PATH is kept, and an installation the
   installer does not own is never overwritten. A vc-frame that cannot be
-  installed now fails the install, like Loctree and AICX.
+  installed now fails the install, like Loctree and AICX. On Linux the Runtime
+  Pack carries the vc-frame engine and the launcher it publishes counts as the
+  installed vc-frame, so a fresh Linux install no longer refuses its own
+  launcher as "another install".
 - On macOS the installer places [vc-terminal](https://github.com/Loctree/vc-terminal/releases)
   0.18.0 in `/Applications/vc-terminal.app` from the release this runtime
   pins (Apple silicon), after checking the release `.sha256`, the Developer
