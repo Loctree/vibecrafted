@@ -5624,7 +5624,8 @@ cmd_dispatch() {
     return 1
   }
   if [[ "${1:-}" == "run" ]]; then
-    PYTHONPATH="$core_dir${PYTHONPATH:+:$PYTHONPATH}" "$(_vibecrafted_python)" -m vibecrafted_core.dispatcher "$@"
+    shift
+    PYTHONPATH="$core_dir${PYTHONPATH:+:$PYTHONPATH}" "$(_vibecrafted_python)" -m vibecrafted_core.dispatcher run --check-precedent "$@"
     return $?
   fi
   PYTHONPATH="$core_dir${PYTHONPATH:+:$PYTHONPATH}" "$(_vibecrafted_python)" -m vibecrafted_core.dispatch.cli "$@"

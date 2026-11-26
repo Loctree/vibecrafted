@@ -8,10 +8,12 @@ import json
 import os
 import signal
 import sys
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from .precedent_admission import HOOK_ENV, require_precedent
 from .repo_selection import RepoSelectionError, add_repo_arguments, select_repository
 from .run_signal import RunSignalServer
 from .supervisor_async import AsyncSupervisor, transcript_human_path
@@ -26,6 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     run = sub.add_parser("run", help="spawn, observe, validate, and close one run")
     run.add_argument("--run-id", required=True)
+    run.add_argument("--check-precedent", action="store_true", help=argparse.SUPPRESS)
     add_repo_arguments(run, root_default="")
     run.add_argument("--meta")
     run.add_argument("--report")
@@ -125,6 +128,32 @@ def _maybe_record_lifecycle_worker_exit(
 async def _run(args: argparse.Namespace) -> int:
     """Run one worker under ``AsyncSupervisor`` and report the canonical outcome."""
     worker = _normalize_worker(args.worker)
+    if args.check_precedent and os.environ.get(HOOK_ENV):
+        if not args.prompt_file:
+            raise ValueError(
+                "precedens admission requires --prompt-file for dispatch run"
+            )
+        try:
+            source = Path(args.prompt_file).expanduser()
+            content = source.read_bytes()
+            brief = content.decode("utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise ValueError(
+                f"precedens admission cannot read the prompt file: {exc}"
+            ) from exc
+        require_precedent(brief, args.root)
+        with tempfile.TemporaryDirectory(
+            prefix="vibecrafted-admitted-brief."
+        ) as directory:
+            admitted = Path(directory) / source.name
+            admitted.write_bytes(content)
+            return await _run_worker(args, worker, admitted)
+    return await _run_worker(args, worker, args.prompt_file)
+
+
+async def _run_worker(
+    args: argparse.Namespace, worker: list[str], prompt_file: str | Path | None
+) -> int:
     signal_server = RunSignalServer(args.run_id).start()
     try:
         handle = await AsyncSupervisor(
@@ -136,7 +165,7 @@ async def _run(args: argparse.Namespace) -> int:
             meta_path=args.meta,
             report_path=args.report,
             transcript_path=args.transcript,
-            prompt_file_path=args.prompt_file,
+            prompt_file_path=prompt_file,
             timeout=args.timeout,
             silence_timeout=args.silence_timeout,
             require_report=not args.no_require_report,

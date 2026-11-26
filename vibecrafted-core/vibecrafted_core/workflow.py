@@ -73,6 +73,7 @@ from .init_resume import init_resume_block
 from .mcp_isolation import prepare_isolated_mcp, validate_mcp_config
 from .model_overrides import _model_override_receipt, _with_model_override
 from .package_resources import deck_path as package_deck_path
+from .precedent_admission import require_precedent
 from .process_control import process_identity_receipt, validate_process_identity
 from .repo_selection import (
     git_toplevel,
@@ -3367,7 +3368,8 @@ def launch_workflow(
     )
     if mcp_config:
         spec = replace(spec, mcp_config=mcp_config)
-    _source_prompt(spec)  # refuse source drift before any mutation
+    source_prompt = _source_prompt(spec)  # refuse source drift before any mutation
+    require_precedent(source_prompt, spec.root or source_dir)
     # Opportunistic pre-flight: before adding a run to the machine, take the dead
     # ones' survivors off it. Every spawn is the natural sweep point — it needs no
     # daemon, and it is exactly when the residue starts costing the new run cores.
