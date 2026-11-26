@@ -165,35 +165,9 @@ boundary) · `obsolete_residue` (dead competitor; candidate for a later
 cut) · `UNRESOLVED` (Loctree evidence insufficient — recorded, never
 silently dropped). Do not invent an owner to make the graph complete.
 
-## Evidence schema (per finding)
+## Evidence, Verdict & Journal Contract
 
-Axis · competitors (`file:line`, LOC) · symbols at war · pair verdict ·
-legend mark · classification · proof (loct outputs cited by organ) ·
-absence-falsification receipt (the literal coverage line). A finding
-missing any element is a candidate, not a finding.
-
-## Run verdict & honest exit
-
-Every run returns exactly one verdict:
-
-| Verdict                      | Condition                                                                                                                                            |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AXES_CLOSED_CANDIDATE`      | zero `UNRESOLVED` rows; every retained executable edge resolves to one authority; zero bypasses; complete untruncated evidence under one fingerprint |
-| `AXES_OPEN`                  | anything less — say so plainly                                                                                                                       |
-| `INSTRUMENT_INCOMPLETE`      | Loctree could not cover the required questions (fail-log appended)                                                                                   |
-| `LAUNCHER_CONTRACT_CONFLICT` | inherited instructions demanded mutation or commits — stop, keep N=1, report                                                                         |
-
-Missing historical checkpoints stay `MISSING` — never reconstructed or
-interpolated. The report ends with the honest state line
-`BUILD/LINT/TEST/RUNTIME=NOT_ASSESSED`: canary is a mutation-free radar
-and green gates are outside its jurisdiction.
-
-## Journal contract
-
-Append-only `./.loctree/canary/JOURNAL.md` in the target repo. Each run
-appends: HEAD SHA, Phase 0 receipts, axes examined, findings with evidence,
-prism scores. Runs never overwrite history — the journal shows what the
-radar saw _at that SHA_, even when a later run knows better.
+Every finding requires the full evidence schema (axis, competitors, pair verdict, legend, classification, loct proof, absence receipt), every run exits with one strict verdict (`AXES_CLOSED_CANDIDATE`, `AXES_OPEN`, `INSTRUMENT_INCOMPLETE`, or `LAUNCHER_CONTRACT_CONFLICT`) ending with `BUILD/LINT/TEST/RUNTIME=NOT_ASSESSED`, and history appends to `./.loctree/canary/JOURNAL.md`. See [references/evidence-and-journal.md](references/evidence-and-journal.md) for full schemas and verdict criteria.
 
 ## Report → discuss → decide (QC stop)
 
@@ -206,75 +180,11 @@ where to look**.
 
 ## Fleet mode (large repos)
 
-One agent per axis (or per scope feeding axes), variable N from Phase I —
-never a fixed count. **Scale-adaptive:** when one plane dwarfs the rest,
-split it along its own substructure into agent-honest budgets and declare
-what stays out as an explicit deferred wave — deferral is a recorded
-decision, not an omission.
+Scale N dynamically from Phase I axes (N=1 Living Tree; N>1 Fleet Worktrees Mode B with worker-created frozen worktrees, per-scope scratchpads, pinned snapshot fingerprints, and N≤8 native / N>8 external dispatch). See [references/fleet-mode.md](references/fleet-mode.md) for the full substrate and dispatch rules.
 
-Substrate is mechanics, not judgement: N=1 → Living Tree; N>1 → Fleet
-Worktrees as a Living Tree Rule **Mode B formation** — the per-scope briefs
-are the written dispatch plan, the per-scope gates the pre-committed
-verifiers, scope domains disjoint, and the canary session the
-single-thread integrator. The **worker creates its own worktree** from the
-integration base (no launcher provisioning) — pinned SHA as a frozen view,
-not a staging area: the radar is mutation-free, so there are no scope
-commits to merge; the integrator copies the per-axis evidence files
-(`.loctree/canary/axes/*.json`, gitignored) from every worktree before
-cleanup, with the worker's returned JSON as backstop. Never park a parallel fleet in one shared
-checkout (operator standing order, 2026-08-20). Every scope gets its own
-scratchpad subdirectory, named in the brief — flat shared tmp filenames
-collide between parallel scopes.
+## Scripts, Dependencies & Common Mistakes
 
-Quote no counts without a pinned snapshot fingerprint: fleet edits shift
-lines and re-trigger incremental scans, so `loct follow` counts drift
-mid-flight. Native subagents inherit the **parent model** (agent model
-parity); pins apply to external workers only. Hybrid: N≤8 native; N>8
-external via
-[await-arming](../vc-dispatch/references/await-arming.md). Per-scope brief
-template: [references/canary-agent-brief.md](references/canary-agent-brief.md).
-Agent pin: user; else whichever launcher is live, in order
-`claude` · `codex` · `grok` · `cursor`.
-
-## Utility scripts
-
-```bash
-CLI="uv run --python 3.12 …/vc-canary/scripts/canary_cli.py"
-
-$CLI snapshot-path --root .
-$CLI repo-view --root .
-$CLI atlas --root . --refresh
-$CLI coverage --root .
-```
-
-All writes go under `./.loctree/` (atlas + canary). Status on stdout; data
-in files.
-
-## Dependencies
-
-| Skill / tool                | Why                                  |
-| --------------------------- | ------------------------------------ |
-| `loct` / loctree            | snapshot, organs, prism, occurrences |
-| `vc-loctree`                | structural doctrine                  |
-| `vc-dispatch` await-arming  | fleet wake, not log files            |
-| `vc-delegate` / `vc-agents` | hybrid native vs external            |
-
-## Common mistakes
-
-- Treating every multi-authority as a defect (an `INTENTIONAL_VARIANT`
-  with a proven boundary is a healthy answer)
-- Proposing refactors or thrones inside the canary run
-- Claiming absence from semantic search without literal coverage
-- Producing a report on a stale snapshot or ignoring dirty/worktree state
-- Overwriting the journal instead of appending
-- Using `loct-context-full.json` as the file inventory
-- Fixed agent count instead of axes from Phase I
-- Counting definitions instead of references (a definition census once hid
-  141 call sites)
-- Reconstructing or interpolating missing historical checkpoints instead
-  of recording `MISSING`
-- Dispatching the retired docstring-WRITE cataloger brief — canary mutates
-  no code (contract retired 2026-08-24)
+Use `canary_cli.py` (`snapshot-path`, `repo-view`, `atlas --refresh`, `coverage`) with Loctree, `vc-loctree`, `vc-dispatch`, and `vc-delegate`/`vc-agents`. Never propose refactors, invent owners, claim absence without literal coverage, or overwrite the journal. See [references/scripts-and-mistakes.md](references/scripts-and-mistakes.md) for commands, dependency table, and full mistake catalogue.
 
 ## Verify before the handoff
 

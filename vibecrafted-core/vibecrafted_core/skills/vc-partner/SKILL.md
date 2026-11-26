@@ -109,27 +109,7 @@ writes the brief; the user need not compose commands or operate the fleet.
 
 ### “Hand it off and come right back” example
 
-“Hand it off and come right back” means delegate the prepared task immediately.
-The synchronous action lasts only long enough to launch the worker, capture its
-receipt and arm completion delivery. Then return attention to the conversation
-while the worker executes; retain responsibility for receiving and closing out
-the result. For an agreed Codex / `gpt-6-sol` task in an isolated worktree, run:
-
-```bash
-PROMPT="${VIBECRAFTED_HOME:-$HOME/.vibecrafted}/artifacts/<org>/<repo>/$(date +%Y_%m%d)/plans/<plan_file>.md"
-vc-workflow codex \
-  --model gpt-6-sol \
-  --repo "$(pwd)" \
-  --worktree true \
-  --file "$PROMPT" \
-  --json
-```
-
-Replace the placeholders with the actual saved brief path and preserve the
-agreed provider, model and runtime. Assign `PROMPT` before the launch command:
-an assignment on that command does not supply its own `$PROMPT` expansion.
-`--file` loads the brief; `--prompt` takes inline text. Retain the returned run
-receipt and arm completion delivery before returning to shared thinking.
+Assign `PROMPT` before invoking `vc-workflow` with `--worktree true --file "$PROMPT" --json`, preserve the agreed provider/model/runtime, retain the returned receipt, arm completion delivery, and return immediately to the conversation. Full command example and notes: [references/handoff-example.md](references/handoff-example.md).
 
 Use framework dispatch for external workers, preserving the selected runtime,
 model, effort, and scope. Detached, observable workers are the default; use a

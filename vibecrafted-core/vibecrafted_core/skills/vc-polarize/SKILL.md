@@ -172,49 +172,16 @@ landed. Polarize strips back to one axis.
 
 ## Core Vocabulary
 
-### Code Smear
-
-A runtime or product concept whose truth is spread across many files,
-layers, docs, tests, artifacts, public surfaces, and operator memory.
-Smear is not automatically bad — it becomes dangerous when the spread
-creates **competing** truths.
-
-### Prism Score
-
-Diagnostic score for how much a concept refracts across `loct
-context --task` framings. High prism score means:
-
-- one local slice will mislead future agents
-- the concept deserves a corpus entry
-- a polarization pass may be needed before release
-
-It does **not** mean: bad code, CI failure, shame KPI, file-count
-penalty.
-
-### Polarization
-
-The opposite motion from smear. Pick one axis / facet and make
-runtime, tests, docs, artifacts, and public surfaces agree.
+Defines **Code Smear** (spread creating competing truths), **Prism Score** (how much a concept refracts across `loct context --task` framings — never a CI failure or file-count penalty), and **Polarization** (converging runtime, tests, docs, artifacts, and public surfaces onto one axis). Full definitions in [references/concepts-and-modes.md](references/concepts-and-modes.md).
 
 ---
 
 ## Modes
 
-### Concept Mode
+- **Concept Mode** — smeared architectural/runtime concept → one concept contract and proof path.
+- **Product Mode** — smeared product/public surface → one product thesis and DoU / release handoff.
 
-Use when an architectural / runtime concept is smeared. Examples:
-marbles lifecycle, release surface, installer public contract,
-research swarm synthesis, auth boundary, memory/search context.
-
-Output: one concept contract and proof path.
-
-### Product Mode
-
-Use when a product / public surface is smeared. Examples: too many
-audiences, split CTA, landing page disagreeing with install path,
-docs overpromising runtime, release brief lacking one shippable thesis.
-
-Output: one product thesis and DoU / release handoff.
+Full examples and scope in [references/concepts-and-modes.md](references/concepts-and-modes.md).
 
 ---
 
@@ -237,66 +204,19 @@ in [`PROCEDURE.md`](PROCEDURE.md).
 
 ## Output Contract
 
-Recommended artifacts:
-
-```
-$VIBECRAFTED_HOME/artifacts/<org>/<repo>/<YYYY_MMDD>/polarize/
-  thesis.md
-  concept-contract.md
-  surface-map.json
-  decision-ledger.md
-  dou-handoff.md
-  release-brief.md
-```
-
-If runtime has no dedicated `polarize/` artifact directory yet, write
-only the normal injected report and include these sections inside it.
-
-### Report sections (mandatory order)
-
-1. **Polarized Thesis** — one sentence, no hedge words
-2. **Mode** — `concept` or `product`
-3. **Prism Evidence** — task framings, context pack paths, score axes
-4. **Primary Boundary / Audience** — what wins now
-5. **Rejected Alternatives** — what loses now, and why
-6. **Runtime Proof** — concrete repo / runtime evidence
-7. **Surface Alignment** — current claim/path → problem → chosen replacement
-8. **Edits Made** — if implementation was in scope
-9. **Gates Run** — commands, exit status, what they prove
-10. **DoU Handoff** — what DoU should audit next
-11. **Release Handoff** — what release can honestly ship and what remains blocked
+Write artifacts under `$VIBECRAFTED_HOME/artifacts/<org>/<repo>/<YYYY_MMDD>/polarize/` (`thesis.md`, `concept-contract.md`, `surface-map.json`, `decision-ledger.md`, `dou-handoff.md`, `release-brief.md`) or include the 11 mandatory report sections (`Polarized Thesis` through `Release Handoff`) in the injected report. Full layout and section order live in [references/output-and-anti-patterns.md](references/output-and-anti-patterns.md).
 
 ---
 
 ## Composition with adjacent skills
 
-- **`vc-init`** — required gate. Polarize without init evidence is blind.
-- **`vc-marbles`** — required upstream. Without marbles' excess to
-  strip, polarize has nothing to cut.
-- **`vc-audit`** — adjacent READ-ONLY falsifier. Audit's verdict
-  matrix can be a direct input to polarize when the question is
-  "which UNVERIFIED claims to accept and which to reject?".
-- **`vc-dou`** — downstream READ-ONLY shipping readiness check.
-  Polarize emits DoU handoff section.
-- **`vc-release`** — downstream WRITE for shipping. Polarize emits
-  release brief.
+Requires `vc-init` and upstream `vc-marbles`, consumes `vc-audit` verdicts when resolving UNVERIFIED claims, and emits handoffs to `vc-dou` and `vc-release`. Full composition notes in [references/output-and-anti-patterns.md](references/output-and-anti-patterns.md).
 
 ---
 
 ## Anti-Patterns
 
-- "Everyone can use it" framing (split audience never polarizes)
-- One more wrapper instead of one contract
-- Changing copy without runtime proof
-- Scoring file count instead of authority drift
-- Treating prism score as a CI failure / shame KPI
-- Treating old context packs as live code truth
-- Hiding a product choice behind technical cleanup
-- Averaging two viable axes instead of choosing one
-- Running polarize on `abort` / `memo` band (must dispatch only on
-  `pass` / `doctrine`)
-- Continuing into DoU / hydrate / decorate / release without operator ask
-- Loading stale prism packs as authoritative
+Never average two viable axes, dispatch on `abort` / `memo` bands, split the audience, change copy without runtime proof, trust stale prism packs, or chain into downstream skills without an explicit ask. Full list in [references/output-and-anti-patterns.md](references/output-and-anti-patterns.md).
 
 ---
 

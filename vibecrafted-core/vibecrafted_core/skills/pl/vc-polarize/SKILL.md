@@ -175,50 +175,16 @@ co wylądowało. Polarize zdziera do jednej osi.
 
 ## Słownik podstawowy
 
-### Rozmaz kodu (Code Smear)
-
-Koncept runtime'u albo produktu, którego prawda jest rozsmarowana po wielu
-plikach, warstwach, docs, testach, artefaktach, publicznych powierzchniach
-i pamięci operatora. Rozmaz nie jest automatycznie zły — staje się
-groźny, gdy rozsmarowanie tworzy **konkurencyjne** prawdy.
-
-### Prism Score (wynik pryzmatu)
-
-Diagnostyczny wynik tego, jak bardzo koncept załamuje się przez framingi
-`loct context --task`. Wysoki Prism Score oznacza:
-
-- jeden lokalny slice zmyli przyszłych agentów
-- koncept zasługuje na wpis w korpusie
-- przed releasem może być potrzebny przebieg polaryzacji
-
-**Nie** oznacza: złego kodu, awarii CI, wstydliwego KPI, kary za liczbę
-plików.
-
-### Polaryzacja
-
-Ruch przeciwny do rozmazu. Wybierz jedną oś / fasetę i spraw, by runtime,
-testy, docs, artefakty i publiczne powierzchnie się zgadzały.
+Definiuje **Code Smear** (rozsmarowanie tworzące konkurencyjne prawdy), **Prism Score** (załamanie konceptu w `loct context --task` — nigdy awaria CI ani kara za liczbę plików) oraz **Polaryzację** (zbieżność runtime'u, testów, docs, artefaktów i powierzchni publicznych na jednej osi). Pełne definicje w [references/concepts-and-modes.md](references/concepts-and-modes.md).
 
 ---
 
 ## Tryby
 
-### Tryb konceptu (Concept Mode)
+- **Tryb konceptu (Concept Mode)** — rozmazany koncept architektoniczny/runtime'u → jeden kontrakt konceptu i ścieżka dowodu.
+- **Tryb produktu (Product Mode)** — rozmazana powierzchnia produktu/publiczna → jedna teza produktu i handoff DoU / release.
 
-Użyj, gdy rozmazany jest koncept architektoniczny / runtime'u. Przykłady:
-cykl życia marbles, powierzchnia release'u, publiczny kontrakt instalatora,
-synteza research swarmu, granica auth, kontekst memory/search.
-
-Wyjście: jeden kontrakt konceptu i ścieżka dowodu.
-
-### Tryb produktu (Product Mode)
-
-Użyj, gdy rozmazana jest powierzchnia produktu / publiczna. Przykłady: za
-dużo grup odbiorców, rozszczepione CTA, landing page kłócący się ze ścieżką
-instalacji, docs obiecujące za dużo względem runtime'u, brief release'u bez
-jednej dowiezialnej tezy.
-
-Wyjście: jedna teza produktu i handoff DoU / release.
+Pełne przykłady i zakres w [references/concepts-and-modes.md](references/concepts-and-modes.md).
 
 ---
 
@@ -241,66 +207,19 @@ w [`PROCEDURE.md`](PROCEDURE.md).
 
 ## Kontrakt wyjścia
 
-Rekomendowane artefakty:
-
-```
-$VIBECRAFTED_HOME/artifacts/<org>/<repo>/<YYYY_MMDD>/polarize/
-  thesis.md
-  concept-contract.md
-  surface-map.json
-  decision-ledger.md
-  dou-handoff.md
-  release-brief.md
-```
-
-Jeśli runtime nie ma jeszcze dedykowanego katalogu artefaktów `polarize/`,
-napisz tylko normalny wstrzyknięty raport i zawrzyj te sekcje wewnątrz niego.
-
-### Sekcje raportu (obowiązkowa kolejność)
-
-1. **Polarized Thesis** — jedno zdanie, bez słów asekuracyjnych
-2. **Mode** — `concept` albo `product`
-3. **Prism Evidence** — framingi taska, ścieżki context packów, osie wyniku
-4. **Primary Boundary / Audience** — co teraz wygrywa
-5. **Rejected Alternatives** — co teraz przegrywa i dlaczego
-6. **Runtime Proof** — konkretne evidence z repo / runtime'u
-7. **Surface Alignment** — bieżące twierdzenie/ścieżka → problem → wybrane zastąpienie
-8. **Edits Made** — jeśli implementacja była w scope
-9. **Gates Run** — komendy, status wyjścia, co dowodzą
-10. **DoU Handoff** — co DoU powinno audytować dalej
-11. **Release Handoff** — co release może uczciwie dowieźć i co pozostaje zablokowane
+Zapisz artefakty w `$VIBECRAFTED_HOME/artifacts/<org>/<repo>/<YYYY_MMDD>/polarize/` (`thesis.md`, `concept-contract.md`, `surface-map.json`, `decision-ledger.md`, `dou-handoff.md`, `release-brief.md`) lub zawrzyj 11 obowiązkowych sekcji raportu (od `Polarized Thesis` do `Release Handoff`) we wstrzykniętym raporcie. Pełny układ i lista sekcji w [references/output-and-anti-patterns.md](references/output-and-anti-patterns.md).
 
 ---
 
 ## Złożenie z sąsiednimi skillami
 
-- **`vc-init`** — wymagana bramka. Polarize bez evidence z init jest ślepy.
-- **`vc-marbles`** — wymagany upstream. Bez nadmiaru z marbles do
-  zdarcia polarize nie ma czego ciąć.
-- **`vc-audit`** — sąsiedni falsyfikator READ-ONLY. Macierz verdictów
-  audytu może być bezpośrednim wejściem do polarize, gdy pytanie brzmi
-  „które twierdzenia UNVERIFIED przyjąć, a które odrzucić?".
-- **`vc-dou`** — downstreamowy sprawdzian gotowości do dowiezienia
-  READ-ONLY. Polarize emituje sekcję handoffu DoU.
-- **`vc-release`** — downstreamowy WRITE do dowiezienia. Polarize emituje
-  brief release'u.
+Wymaga `vc-init` i upstreamu `vc-marbles`, konsumuje macierz verdictów `vc-audit` przy rozstrzyganiu twierdzeń UNVERIFIED i emituje handoffy dla `vc-dou` oraz `vc-release`. Szczegóły złożenia w [references/output-and-anti-patterns.md](references/output-and-anti-patterns.md).
 
 ---
 
 ## Antywzorce
 
-- Framing „każdy może tego użyć" (rozszczepiona grupa odbiorców nigdy się nie polaryzuje)
-- Jeszcze jeden wrapper zamiast jednego kontraktu
-- Zmiana copy bez dowodu z runtime'u
-- Punktowanie liczby plików zamiast dryfu autorytetu
-- Traktowanie Prism Score jako awarii CI / wstydliwego KPI
-- Traktowanie starych context packów jako żywej prawdy kodu
-- Ukrywanie wyboru produktowego za technicznym sprzątaniem
-- Uśrednianie dwóch wykonalnych osi zamiast wybrania jednej
-- Uruchamianie polarize na paśmie `abort` / `memo` (dispatchuj tylko na
-  `pass` / `doctrine`)
-- Kontynuowanie w DoU / hydrate / decorate / release bez prośby operatora
-- Ładowanie nieświeżych prism packów jako autorytatywnych
+Nie uśredniaj dwóch wykonalnych osi, nie dispatchuj na pasmach `abort` / `memo`, nie rozszczepiaj grupy odbiorców, nie zmieniaj copy bez dowodu z runtime'u, nie traktuj starych context packów jako żywej prawdy kodu i nie przechodź dalej do DoU/hydrate/decorate/release bez prośby operatora. Pełna lista w [references/output-and-anti-patterns.md](references/output-and-anti-patterns.md).
 
 ---
 

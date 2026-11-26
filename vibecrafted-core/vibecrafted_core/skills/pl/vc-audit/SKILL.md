@@ -174,34 +174,7 @@ decyzję operatora.
 
 ## Postawa domyślna: falsyfikacja
 
-Domyślny verdict dla każdego wymagania to **UNVERIFIED**. Wymaganie
-zarabia PASS tylko przy wszystkich czterech:
-
-1. **Evidence z taska** — zacytowane acceptance criterion lub non-goal
-2. **Evidence z kodu** — ścieżka pliku, nazwa funkcji/typu/testu, zakres linii
-3. **Evidence z testów** — nazwa testu + output uruchomienia, albo uzasadniona luka testowa
-4. **Negative check** — stare/zabronione zachowanie nie jest już obecne
-
-### Twarde reguły nie-ufania
-
-NIE WOLNO ci ufać statusowi z frontmattera taska, raportom wcześniejszych
-agentów, commit messages, wpisom AICX, memory slices (wycinkom pamięci),
-notatkom z dziennika projektu, adnotacjom „completed", opisom PR-ów, inline'owym
-komentarzom `// done` ani wcześniejszym raportom `vc-followup` /
-`vc-review` — chyba że **niezależnie potwierdzone w bieżącym kodzie/testach**.
-Każde z nich to _twierdzenie_, nie evidence. Audit zamienia twierdzenia
-w evidence, sprawdzając kod.
-
-### Taksonomia evidence
-
-| Stopień | Kryteria                                                   |
-| ------- | ---------------------------------------------------------- |
-| STRONG  | Kod + ukierunkowany test + negative check OK               |
-| MEDIUM  | Kod + słaby/ogólny test + negative check OK                |
-| WEAK    | Tylko kod, brak testu lub brak negative check              |
-| NONE    | Brak bezpośredniego evidence — verdict musi być UNVERIFIED |
-
-**PASS wymaga STRONG lub MEDIUM na wszystkich kluczowych wymaganiach.**
+Domyślny verdict dla każdego wymagania to **UNVERIFIED**; PASS wymaga dowodów z taska, kodu, testów i negative checku o sile `STRONG` lub `MEDIUM` na wszystkich kluczowych wymaganiach. Nie ufaj frontmatterowi, commit messages, AICX ani wcześniejszym raportom bez weryfikacji w kodzie. Pełne reguły nie-ufania i taksonomia dowodów w [references/falsification-rules.md](references/falsification-rules.md).
 
 ---
 
@@ -230,23 +203,7 @@ P1 (brak kluczowego kryterium), P2 (luka testowa/raportowa/procesowa), P3 (kosme
 
 ## Kontrakt wyjścia
 
-`vc-audit` produkuje dokładnie trzy pliki w katalogu raportu:
-
-1. **`audit_report.md`** — najpierw executive verdict, tabela per-task,
-   self-attack pass, model check
-2. **`audit_requirements_matrix.jsonl`** — jeden rekord JSON na
-   wymaganie: verdict, stopień evidence, lokalizacje w kodzie, evidence
-   z testów, wynik negative check
-3. **`audit_trace.log`** — zwarty trace per-faza (`BEGIN`,
-   `READ_CONTEXT_PACK`, `READ_TASK`, `EXTRACT_REQUIREMENTS`,
-   `INSPECT_CODE`, `VERIFY_TESTS`, `NEGATIVE_CHECK`, `DEPENDENCY_CHECK`,
-   `STAGE_CHECK`, `CLASSIFY`, `SELF_ATTACK`, `WRITE_REPORT`, `END`)
-
-Executive verdict MUSI zawierać liczby tasków per verdict, liczby
-P0/P1/P2/P3, top 5 ryzyk, kolejne 5 akcji oraz `model_confidence: high |
-medium | low`.
-
-Szablon operator dispatch żyje w [`DISPATCH.md`](DISPATCH.md).
+`vc-audit` zapisuje trzy pliki (`audit_report.md`, `audit_requirements_matrix.jsonl`, `audit_trace.log`) z liczbami verdictów, P0–P3, top 5 ryzyk, kolejnymi 5 akcjami i `model_confidence`. Pełna lista faz trace'u i odwołanie do `DISPATCH.md` w [references/output-and-acceptance.md](references/output-and-acceptance.md).
 
 ---
 
@@ -271,34 +228,13 @@ Szablon operator dispatch żyje w [`DISPATCH.md`](DISPATCH.md).
 
 ## Antywzorce
 
-W trybie auditu nie:
-
-- naprawiaj kodu podczas auditu („tylko mały refactor przy okazji")
-- oznaczaj PASS na podstawie commit messages, frontmattera czy wcześniejszych raportów
-- zwijaj wszystkich tasków w ogólne podsumowanie
-- pomijaj negative check („nowy kod jest, to wystarczy")
-- pomijaj adversarial pass ani self-attack
-- traktuj wylądowanego Stage 1 jako PASS całego planu
-- traktuj odroczonego Stage 2 jako FAIL całego planu
-- produkuj samego raportu bez matrycy + trace
-- ufaj AICX / kronice / memory slices jako prawdzie repo
-- omijaj Loctree przy pytaniach o graf importerów / zasięg zmiany / martwy kod
-- broń swojego pierwszego verdictu podczas self-attacku zamiast go obniżyć
+Nie edytuj kodu w trakcie auditu, nie ufaj twierdzeniom bez sprawdzenia kodu i testów, nie pomijaj negative checku ani self-attacku, nie zwijaj tasków w narrację i nie omijaj Loctree przy pytaniach strukturalnych. Pełna lista antywzorców w [references/output-and-acceptance.md](references/output-and-acceptance.md).
 
 ---
 
 ## Kryteria akceptacji
 
-Przebieg auditu jest **gotowy**, gdy:
-
-- [ ] Każdy plik taska / planu ma `task_read_status: FULL_READ`
-- [ ] Każde wymaganie ma stopień evidence + verdict
-- [ ] Każde wymaganie ma wyniki positive + negative check
-- [ ] Self-attack wykonany na każdym PASS / PASS_WITH_GAPS
-- [ ] Model check wyemitowany z oceną confidence
-- [ ] Wszystkie trzy pliki wyjściowe zapisane
-- [ ] `git diff` pusty dla ścieżek poza raportem (kod nietknięty)
-- [ ] Executive verdict odwołuje się do konkretnego kolejnego ruchu
+Audit jest gotowy, gdy wszystkie pliki tasków mają `FULL_READ`, każde wymaganie ma positive/negative check + stopień evidence, wykonano self-attack i `model_confidence`, istnieją wszystkie trzy pliki wyjściowe, a `git diff` poza raportem jest pusty. Pełna checklista w [references/output-and-acceptance.md](references/output-and-acceptance.md).
 
 ---
 

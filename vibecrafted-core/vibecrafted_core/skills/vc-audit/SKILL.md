@@ -173,33 +173,7 @@ operator decision.
 
 ## Default Stance: Falsification
 
-Default verdict for every requirement is **UNVERIFIED**. A requirement
-earns PASS only with all four:
-
-1. **Task evidence** — quoted acceptance criterion or non-goal
-2. **Code evidence** — file path, function/type/test name, line range
-3. **Test evidence** — test name + run output, or justified test-gap
-4. **Negative check** — old/forbidden behavior not still present
-
-### Hard Non-Trust Rules
-
-You MUST NOT trust task frontmatter status, prior agent reports,
-commit messages, AICX entries, memory slices, chronicle notes,
-"completed" annotations, PR descriptions, inline `// done` comments,
-or prior `vc-followup` / `vc-review` reports — unless **independently
-confirmed in current code/tests**. Each of those is a _claim_, not
-evidence. Audit converts claims into evidence by checking code.
-
-### Evidence Taxonomy
-
-| Grade  | Criteria                                        |
-| ------ | ----------------------------------------------- |
-| STRONG | Code + targeted test + negative check OK        |
-| MEDIUM | Code + weak/general test + negative check OK    |
-| WEAK   | Code only, no test or no negative check         |
-| NONE   | No direct evidence — verdict must be UNVERIFIED |
-
-**PASS requires STRONG or MEDIUM on all core requirements.**
+Every requirement defaults to **UNVERIFIED**; PASS requires task, code, test, and negative-check evidence graded `STRONG` or `MEDIUM` across all core items. Never trust frontmatter, commit messages, AICX, or prior reports without code verification. See the full hard non-trust rules and evidence taxonomy table in [references/falsification-rules.md](references/falsification-rules.md).
 
 ---
 
@@ -228,23 +202,7 @@ P1 (key criterion missing), P2 (test/report/process gap), P3 (cosmetic).
 
 ## Output Contract
 
-`vc-audit` produces exactly three files in the report directory:
-
-1. **`audit_report.md`** — executive verdict first, per-task table,
-   self-attack pass, model check
-2. **`audit_requirements_matrix.jsonl`** — one JSON record per
-   requirement: verdict, evidence grade, code locations, test
-   evidence, negative check result
-3. **`audit_trace.log`** — compact per-phase trace (`BEGIN`,
-   `READ_CONTEXT_PACK`, `READ_TASK`, `EXTRACT_REQUIREMENTS`,
-   `INSPECT_CODE`, `VERIFY_TESTS`, `NEGATIVE_CHECK`, `DEPENDENCY_CHECK`,
-   `STAGE_CHECK`, `CLASSIFY`, `SELF_ATTACK`, `WRITE_REPORT`, `END`)
-
-Executive verdict MUST include task counts per verdict, P0/P1/P2/P3
-counts, top 5 risks, next five actions, and `model_confidence: high |
-medium | low`.
-
-Operator dispatch template lives in [`DISPATCH.md`](DISPATCH.md).
+`vc-audit` emits three files (`audit_report.md`, `audit_requirements_matrix.jsonl`, `audit_trace.log`) with verdict counts, P0–P3 counts, top risks, next actions, and `model_confidence`. Full trace phase list and dispatch reference (`DISPATCH.md`) live in [references/output-and-acceptance.md](references/output-and-acceptance.md).
 
 ---
 
@@ -269,34 +227,13 @@ Operator dispatch template lives in [`DISPATCH.md`](DISPATCH.md).
 
 ## Anti-Patterns
 
-Do not in audit mode:
-
-- fix code during audit ("just a small refactor while I'm here")
-- mark PASS based on commit messages, frontmatter, or prior reports
-- collapse all tasks into a general summary
-- skip the negative check ("new code is there, that's enough")
-- skip the adversarial pass or self-attack
-- treat Stage 1 landed as full-plan PASS
-- treat Stage 2 deferred as full-plan FAIL
-- produce only the report without a matrix + trace
-- trust AICX / chronicle / memory slices as repo truth
-- bypass Loctree on importer-graph / blast-radius / dead-code questions
-- protect your first verdict during self-attack instead of downgrading
+Never edit code during audit, trust claims without code/test checks, skip negative checks or self-attack, collapse tasks into prose, or bypass Loctree on structural questions. Full anti-patterns list in [references/output-and-acceptance.md](references/output-and-acceptance.md).
 
 ---
 
 ## Acceptance Criteria
 
-The audit run is **done** when:
-
-- [ ] Every task / plan file has `task_read_status: FULL_READ`
-- [ ] Every requirement has evidence grade + verdict
-- [ ] Every requirement has positive + negative check results
-- [ ] Self-attack executed on every PASS / PASS_WITH_GAPS
-- [ ] Model check emitted with confidence rating
-- [ ] All three output files written
-- [ ] `git diff` empty for non-report paths (no code touched)
-- [ ] Executive verdict references concrete next move
+An audit is complete when all task files are `FULL_READ`, every requirement has positive/negative checks + grade, self-attack and `model_confidence` ran, all three output files exist, and `git diff` is empty on non-report paths. Full checklist in [references/output-and-acceptance.md](references/output-and-acceptance.md).
 
 ---
 

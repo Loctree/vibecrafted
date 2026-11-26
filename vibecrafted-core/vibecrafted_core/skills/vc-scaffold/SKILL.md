@@ -51,34 +51,7 @@ The lighthouse orients before the fleet sails; the armor is the verification eac
 
 ## Operator Entry
 
-Current `AGENTS.md` and `docs/public/dispatch/dispatch-schema.md` outrank historical
-reference advice when substrate, ownership, journals, or approval semantics disagree.
-
-### Living Tree / Worktree Rule
-
-Use the runtime selected by the Founder, plan, or launcher: Living Tree / `local-native`,
-Fleet Worktrees / `local-worktrees`, Fleet VM local, or Fleet VM cloud. A single interactive
-lane defaults to the current Living Tree when no other substrate was selected. Generic words
-like "isolate" or "parallel" do not authorize moving it. Typed dispatch assigns each non-integrator
-a supervisor-created worktree on `cut/<cut-id>` from the resolved baseline; workers inherit it,
-never create a second branch/worktree or integrate themselves. Record parent/effective roots,
-baseline and terminal SHAs, artifacts and integration disposition. Re-read before editing,
-stage only owned paths/hunks, preserve foreign work, and report unresolvable overlap.
-
-See [Living Tree Rule](../LIVING_TREE_RULE.md).
-
-### Dispatch
-
-Enter the framework session, then launch through the command deck (not raw `skills/.../*.sh`):
-
-```bash
-vibecrafted start            # or: vc-start
-vibecrafted scaffold claude --prompt 'Design the payment system'
-vc-scaffold agy --prompt 'Plan migration from NextAuth to custom auth'
-vibecrafted scaffold codex --file /path/to/idea-brief.md
-```
-
-Prefer `--file` for an existing plan/artifact and `--prompt` for inline intent.
+Current `AGENTS.md` and `docs/public/dispatch/dispatch-schema.md` outrank historical advice on substrate, ownership, journals, or approvals. Honor the selected runtime (`local-native`, `local-worktrees`, VM); typed dispatch assigns non-integrators a supervisor-created `cut/<cut-id>` worktree (workers inherit, never create a second branch/worktree or integrate). Launch via `vibecrafted start` + `vibecrafted scaffold <agent> --prompt|--file`. Full rules & examples: [references/phases-and-operator.md](references/phases-and-operator.md).
 
 ## Canonical Orientation Gate (HARD-BLOCK — safety-critical)
 
@@ -105,373 +78,44 @@ or misses a surface, append feedback to `~/.vibecrafted/loctree/loctree-fail.md`
 
 ## Founder Interview Gate (HARD-BLOCK)
 
-Scaffold is founder-first, so it must not invent the founder's intent. Before Shape, record one of
-these two forms of evidence in the plan frontmatter and Orient section:
-
-1. a concrete existing interview source (operator journal, AICX session/extract, or founder brief),
-   with its path/session ID and the decisions actually recovered from it; or
-2. the founder's answers gathered in the current conversation.
-
-If neither exists, ask the founder the missing product questions before writing the architecture
-plan. "No interview was needed", "the task was clear", and "not asking did no harm" are forbidden
-self-exemptions. This gate is the discovery intake; it does not authorize twenty mid-scaffold
-questions after the decisions are captured.
+Before Shape, record in frontmatter and Orient either (1) an existing interview source (journal, AICX session/extract, or founder brief with path/session ID + recovered decisions) or (2) founder answers from this conversation. Otherwise ask missing product questions first — no self-exemptions ("task was clear"). Full gate: [references/phases-and-operator.md](references/phases-and-operator.md).
 
 ## Pipeline Position
 
-```
-[SCAFFOLD] → init → implement → review → workflow → followup → marbles → audit → polarize → dou → hydrate → release
-^^^^^^^^^^   WRITE entry of the read/write cadence (WRITE produces an artifact, READ falsifies it)
-```
-
-Scaffold is the WRITE entry. If the task is already clear and bounded, skip scaffold and start at
-`vc-init`. The full cadence and the WRITE/READ classification live in `references/cadence.md`.
-
-`vc-ship` remains the normal lifecycle umbrella. A **Founder-ordered bounded dispatch**
-of an already shaped repair is a supported invocation through `vc-dispatch`; it does not
-require all lifecycle stages or an emergency first. Preserve current orientation, complete
-briefs, pinned models, doctor/dry-run, declared verifiers, and truthful receipts. When that
-bounded dispatch consumes a scaffold package, all artifact/manifest/DRIVER/brief requirements
-below still apply; the selected execution route must be explicit in DRIVER.
+`[SCAFFOLD] → init → implement → review → workflow → followup → marbles → audit → polarize → dou → hydrate → release`
+Scaffold is the WRITE entry (`references/cadence.md`). Clear bounded tasks skip to `vc-init`; `vc-ship` is the normal lifecycle umbrella, while a Founder-ordered bounded dispatch via `vc-dispatch` is supported when DRIVER preserves all artifact/manifest/brief gates. Full details: [references/phases-and-operator.md](references/phases-and-operator.md).
 
 ## The Six Phases
 
-Run these in order. Each phase produces the input the next consumes. Phases 5–6 are the
-**delivery mechanism**: every cut gets a brief (hard-gate) and the artifacts are served for
-Founder review — not narrated as prose and not gated on the agent's good intentions.
+Run in order; each phase feeds the next. Detailed phase procedures & enforcement live in [references/phases-and-operator.md](references/phases-and-operator.md) and [references/artifacts-and-gates.md](references/artifacts-and-gates.md):
 
-### 1. Orient (research-first)
-
-Pass the Canonical Orientation Gate above. Map the existing landscape: `repo-view` for size/health,
-`focus` on suspect modules, `slice` critical files, `tree` for hotspots, `follow` for dead/cycles.
-Capture the **constraint space** — tech (stack/versions/infra), team (who builds, which languages),
-business (time budget, deadline), scope (MVP vs full vision). Constraints shape everything.
-
-### 2. Falsify (adversarial premise check)
-
-Before committing to a shape, try to **break** the founding assumption. Ask "how would I know this
-is a lie?" The 0-byte-passes-exit-0 lesson: every "it works" must survive a real probe, never a
-green checkmark alone. Surface the failure modes the plan must defend against.
-
-### 3. Shape (scale-adaptive)
-
-Decide architecture by **boundaries and decisions** (3-5 that matter, not a thousand details), set
-**scope** (in / out / explicitly out — be ruthless), and define **product identity** (material
-metaphor, color roles, typography, tone, dark/light) — identity is an architectural decision that
-feeds DoU and Decorate later. Then pick the **output shape by scale**: single-cut brief · wave-atlas+tracker · project read/write pipeline. See `references/output-shapes.md`.
-
-### 4. Defend (gates first-class)
-
-Break work into agent-sized cuts (30-120 min). **Every cut carries the measure-core**: a `Vector`
-(stabilize/implement/recon/e2e), the four-term delta (`intent | baseline | claim | delivery`), a
-`state` marker `[ ] [~] [?] [!] [x]`, and a **delivery-verifier** — the non-fakeable test that flips
-`[~]→[x]`. A cut without a verifier ships as `[?]`, never `[x]`. See `references/measure-core.md`.
-
-### 5. Brief every cut (HARD-GATE — this is the delivery mechanism)
-
-Produce the plan from `references/plan-template.md` (master-dispatch: wave atlas + dependency
-graph + the `state` column). **Then — non-negotiable — render a brief for EVERY cut.** A cut
-without a rendered, well-formed brief does not exist as far as the plan is concerned. This is the
-rule that turns a plan from a shell (wydmuszka) into something a fleet can execute.
-
-For each cut, write `briefs/<wave>-<slot>_<slug>.md` from the 12-section dispatch template
-(`references/output-shapes.md`): mission · context · files · acceptance · gates · out-of-scope ·
-Living Tree etiquette (verbatim) · Loctree-first · recovery hint · branch+commit · report path.
-
-**Enforcement (ported from `/brainstorming`, the flow that leads the agent by the hand):**
-
-- **Checklist→TODOs:** create one TodoWrite item per cut-brief; complete them in order. The
-  scaffold is not "done" while any cut-brief todo is open.
-- **Hard-gate:** do NOT hand off to `vc-operator`, dispatch, or claim the scaffold complete until
-  EVERY cut in the wave atlas has a matching brief with all 12 sections present.
-- **Loop to green:** missing or malformed brief → loop back and render it. Single terminal state:
-  all briefs rendered AND the scaffold-doctor gate passes.
-- **Anti-pattern pre-emption (FORBIDDEN rationalizations):** "this cut is too small to need a
-  brief", "we are 1:1 so no briefs needed", "the master-dispatch table is enough". A plan without
-  per-cut briefs is a shell, not a plan. No exceptions, regardless of perceived simplicity.
-
-### 5.5 DRIVER.md (HARD-GATE — the Founder's hand-off driver)
-
-Alongside the briefs, render **one `DRIVER.md`** co-located with `briefs/`. It is the single
-self-sufficient artifact the Founder (or a cold fleet) drives the whole plan from **when the
-in-thread loop dies**. NOT optional, NOT a re-skin of the atlas — it is the executable hand-off.
-It MUST contain all six:
-
-1. **Full absolute paths** — every plan artifact, brief, orient evidence, and input/fixture, as
-   copy-pasteable absolute paths.
-2. **Dependency graph WITH a `why` on every edge** — what-after-what AND why: why each cut precedes
-   the next; why a pair is **SEQUENCE** (shared file domain → Living Tree conflict) vs **PARALLEL**
-   (disjoint domains → safe concurrent); and where every **⛔ Founder-button STOP** sits
-   (trunk merge, force-push, PR merge/close, tag/branch deletion, deploy, product decisions,
-   or a wave-specific push/install fence). A graph without `why` is a diagram, not a driver.
-3. **Ready handoff** — run `vibecrafted scaffold-doctor --plan <root> --repo <git-root>` first
-   (REFUSE = no handoff), then exactly one plan-level validation block for the canonical
-   `<plan-id>.dispatch.toml` (`vibecrafted dispatch … --doctor` + dry-run), followed by the `/vc-ship`
-   A→Z handoff, or the explicit Founder-ordered bounded `vibecrafted dispatch <plan>` route.
-   The selected supervisor owns start and resume; the DAG owns order and allowed parallelism. Do
-   not turn DRIVER into a per-cut launcher list and do not teach manual `vibecrafted workflow ... --prompt`
-   sequencing.
-4. **The state alphabet + the `[ ]→[x]` rule, reproduced verbatim** (mirrors Measurement):
-   `[ ]` todo · `[~]` running · `[?]` done-unverified · `[!]` blocked · `[x]` verifier-green.
-   **Only a delivery-verifier flips `[~]→[x]`; an agent's claim NEVER reaches `[x]` on its own.**
-   The rule lives IN the DRIVER on purpose — so that mid-dispatch nobody promotes a claim to done
-   without re-running the verifier. That promotion-without-proof is the single failure mode that
-   wrecks an operator run ("rozjedziemy się"). Encode it where the dispatcher's eyes are.
-5. **Live status snapshot** + `dou-index = |[x]| / total`.
-6. **Reception matrix (Odbiór) — R12, Founder 2026-09-15.** A section
-   `## Odbiór (matryca wyników)` with one row per cut
-   (`cut | commit | dowód (Operator) | Worker | Operator | Founder`) and the signature line
-   **`Zatwierdzono przez: Worker [ ] Operator [ ] Founder [ ]`**. Every box starts `[ ]` — an
-   untouched `[ ]` is a NON-DELIVERY indicator, not a formatting nit. Worker flips its own boxes
-   as part of delivery (the supervisor refuses to verify a cut whose Acceptance boxes are still
-   `[ ]`); the flip is a claim, never proof — verifiers still decide. Operator flips only after
-   running the verifiers itself. **Founder `[x]` may only exist alongside
-   `acceptance/founder.json` in the plan root; an agent never signs for the Founder** —
-   scaffold-doctor R12 refuses a plan with a forged Founder signature or no matrix at all.
-
-### 5.6 manifest.json (HARD-GATE — canonical artifact inventory)
-
-Create one plan root at
-`${VIBECRAFTED_HOME:-$HOME/.vibecrafted}/artifacts/<org>/<repo>/<YYYY_MMDD>/plans/<plan_id>/` and write
-`manifest.json` there as mandatory output. Schema version `"1"` declares `plan_id`, `org`, `repo`,
-`day`, and an ordered `artifacts` array. Every artifact entry declares a stable `id`, explicit
-`role`, relative `path`, `editable`, and `required`; optional `dependencies` contain artifact IDs.
-Supported roles are `driver`, `wave-atlas`, `dispatch`, `brief`, `design-doc`, `traceability`, `tracker`,
-`falsification`, `report`, and `other`. Register every generated artifact before handoff. Filenames
-never imply roles. Do not create an `operator/` mirror, compatibility copy, naming alias, or symlink.
-
-### 5.7 YAML frontmatter on EVERY artifact (HARD-GATE — no bare markdown)
-
-Every markdown artifact this skill produces — MISSION, ATLAS, DRIVER, tracker, falsification,
-every brief, every design doc — opens with YAML frontmatter, no exceptions:
-
-```yaml
----
-plan_id: <plan_id>
-run_id: <scaffold run id, when running under a lifecycle>
-session_id: <agent session_id from `aicx sessions current` or raw `.jsonl` filename read>
-role: driver | wave-atlas | brief | tracker | falsification | design-doc | mission | other
-author: <artifact author>
-agent: <executing agent/provider, if bound>
-date: YYYY-MM-DD
-project: <org>/<repo>
----
-```
-
-`author` records who created the artifact; it never selects its executor. For an
-executable brief, `agent` binds the intended executing agent/provider, which may
-differ from the author. It can be omitted when the launcher or typed dispatch
-plan supplies the executor. When reusing a brief with `agent`, ensure that binding
-matches the selected executor: a conflict is refused. Never infer an executor
-from `author`.
-
-Why this is a hard-gate, not decoration: the settlement contract's rule 6 ("no bare markdown —
-artifact without run_id lands as needs-attention"), retrieval (search/index engines rank and
-scope by these fields), and provenance (an artifact found loose on disk must identify its plan
-and author without archaeology). A plan package with bare-markdown members fails scaffold review
-the same way a missing brief does. A prior field report recorded this on 2026-07-23 after receiving a
-package with frontmatter on some members and none on others — mixed is worse than missing,
-because it teaches readers to stop checking.
-
-### 5.8 `<plan-id>.dispatch.toml` (HARD-GATE — supervisor-readable execution contract)
-
-Every scaffold, including a one-cut scaffold, ends with a `<plan-id>.dispatch.toml` using schema
-`vibecrafted.dispatch.v1`. It encodes the complete cut set, named phases, `depends_on` edges,
-explicit allowed concurrency, agent/workflow identity and model pins, per-cut brief paths, commit policy, and
-delivery-verifiers. Register it in `manifest.json` with role `dispatch`. The cut IDs and brief paths
-MUST cover every executable cut in the atlas exactly once; no second scheduling truth is allowed.
-Prove the artifact before handoff with:
-
-```bash
-vibecrafted dispatch <absolute-plan-root>/<plan-id>.dispatch.toml --doctor
-vibecrafted dispatch <absolute-plan-root>/<plan-id>.dispatch.toml --dry-run --json
-```
-
-After validation, hand that exact artifact to `/vc-ship` for the normal A→Z lifecycle.
-For an explicit Founder-ordered bounded dispatch, DRIVER may instead name
-`vibecrafted dispatch <plan.dispatch.toml>` and its resume command. This is a supported
-shaped-wave route, not a second scheduler. Preserve Founder model pins verbatim, headless
-workers by default, and armed supervisor-side `vibecrafted await <agent> --run-id <id>`.
-Workers finish foreground gates, report and commit in the current turn; they cannot be
-woken by background completions. Worker acceptance boxes never sign for Operator/Founder.
-
-Do not require the Founder to hand-write TOML or paste one `vibecrafted workflow <agent> --prompt ...`
-command per task. Manual per-cut launch instructions do not belong in **Running This Plan** or the
-normal DRIVER path. Besides the supported bounded plan-level route, an emergency recovery note may use a per-cut launch
-only after naming the `/vc-ship`/supervisor failure and the reason the normal route is unavailable;
-it must record return-control evidence and may not become a parallel execution system.
-
-### Compile-embargo plans
-
-If a plan defers compile/test gates while shaping architecture, apply the phase-aware recovery
-contract in `references/compile-embargo.md`. Once the Founder authorizes an embargo phase,
-`--no-verify` is fully authorized for each local worker checkpoint in that phase. It bypasses the
-bundled Git hook entrypoint as a whole, so workers report what ran and what was skipped; it is not
-a security or compile/test delivery claim. Workers do not push; a push using `--no-verify` is an
-exclusive Founder button. The designated integrator may make
-a local structural admission after exact commit/scope, Semgrep, and secret/security review, so later
-waves can build on the joined architecture while compile, lint, type-check, and tests remain
-deferred. Only named closure plus full language-appropriate gates creates verified delivery.
-
-### 6. Serve & review (editable artifacts via vibecrafted-server)
-
-The plan + briefs are **editable artifacts**, not a wall of inline questions. The flow is:
-research → present findings + effort estimate → propose the first cut/wave shape → render the
-briefs → **serve them for Founder review through `vibecrafted-server`** (the natural home of this
-phase's tooling: it reads the typed control-plane contract and renders the wave atlas + briefs as a
-**multi-tab, editable** HTML surface — one tab per artifact (atlas · each brief · each design doc),
-edited in place). The Founder steers by editing the rendered plan in the browser, not by answering
-twenty questions mid-scaffold. Refine WITH the Founder on the served artifacts.
-
-**Transplant the surface — do not reinvent it.** Proven sources to lift from: `../pensieve`
-(multi-tab editable workspace dashboard), `../unicode-puzzles-portal` (portal generators), and
-`/brainstorming`'s visual-companion (proven HTML mockup/diagram generators). The server-review tab
-must be multi-tab + editable from day one, not a static dump.
-
-**scaffold-doctor (the gate, machine-checked):** run the product verb before any
-scaffold→implement handoff — do not treat the validator as an external server-only tool:
-
-```bash
-vibecrafted scaffold-doctor --plan <root> --repo <git-root>
-```
-
-REFUSE (exit 1) means no handoff. The verb locates the generation (or locally built)
-`scaffold-doctor` binary and loads the same typed `manifest.json` the server uses. It refuses
-until: the manifest identity matches its canonical plan root; all declared required artifacts
-exist; IDs and paths are unique; dependencies resolve; editable paths are non-symlinked and remain
-inside the plan root; briefs on disk are declared; and the atlas has a wave atlas + dependency
-graph; every cut has a `briefs/<wave>-<slot>_<slug>.md` with all 12 sections; acceptance bullets are
-atomic + verifier-backed; a design doc exists for every cut flagged `needs_design`; **a `DRIVER.md`
-exists and carries all six (full paths · why-annotated graph · ready commands · the `[ ]→[x]` rule
-verbatim · status snapshot · the R12 reception matrix with an unforged Founder box)**. The gate is
-**machine-checked, not agent-promised** — it is the
-same artifact-as-truth gate the async runtime uses between every read-write cadence handoff.
+1. **Orient:** pass the Orientation Gate, map hubs/twins/cycles with Loctree, capture tech/team/time/scope constraints.
+2. **Falsify:** try to break founding assumptions before shaping; every "it works" must survive a real probe.
+3. **Shape:** decide 3–5 architectural boundaries, ruthless in/out scope, product identity, and scale shape ([references/output-shapes.md](references/output-shapes.md)).
+4. **Defend:** split into 30–120 min cuts, each with `Vector`, 4-term delta, `state` marker, and non-fakeable `delivery-verifier` ([references/measure-core.md](references/measure-core.md)).
+5. **Brief every cut (HARD-GATE):** emit master plan ([references/plan-template.md](references/plan-template.md)) AND render every `briefs/<wave>-<slot>_<slug>.md` with all 12 sections (`references/output-shapes.md`). No cut exists without a brief; no forbidden "too small" excuses.
+   - **5.5 `DRIVER.md` (HARD-GATE):** self-sufficient Founder handoff with (1) full absolute paths, (2) why-annotated DAG + `⛔ Founder-button STOP`s, (3) `scaffold-doctor` + one `<plan-id>.dispatch.toml` validation + `/vc-ship` (or Founder-ordered `vibecrafted dispatch`) route, (4) verbatim `[ ]→[x]` rule, (5) status snapshot + `dou-index`, (6) R12 `## Odbiór (matryca wyników)` (all `[ ]`; `Founder [x]` only with `acceptance/founder.json`).
+   - **5.6 `manifest.json` (HARD-GATE):** mandatory schema `"1"` inventory under `${VIBECRAFTED_HOME:-$HOME/.vibecrafted}/artifacts/<org>/<repo>/<YYYY_MMDD>/plans/<plan_id>/`; register every artifact; no `operator/` mirror or alias.
+   - **5.7 YAML frontmatter (HARD-GATE):** every markdown artifact opens with YAML frontmatter (`plan_id`, `run_id`, `session_id`, `role`, `author`, optional `agent`, `date`, `project`). Never infer executor from `author`.
+   - **5.8 `<plan-id>.dispatch.toml` (HARD-GATE):** `vibecrafted.dispatch.v1` contract covering every cut once; validate with `--doctor` and `--dry-run --json` before handoff; preserve model pins and headless workers.
+   - **Compile-embargo plans:** follow [references/compile-embargo.md](references/compile-embargo.md); `--no-verify` covers local worker checkpoints only (never push), with integrator structural admission and full closure gates later.
+6. **Serve & review:** serve multi-tab editable artifacts via `vibecrafted-server`, then pass `vibecrafted scaffold-doctor --plan <root> --repo <git-root>` (REFUSE = no handoff).
 
 ## Measurement (the armor)
 
-Every plan unit is claim/outcome-addressable. **Only a verifier flips `[~]→[x]`; a claim never
-reaches `[x]` on its own** — that invariant is what makes the plan measurable instead of optimistic.
-`dou-index = |[x]| / total`; `delta = {[ ],[~],[?],[!]}`; trigger/stop reads the `state` column
-(`[!]`/`[?]` → STOP → recovery-vector; full `[x]` wave → TRIGGER next). **STOP is never surrender —
-it triggers a recovery-vector** (fallback/failover/handsoff). Full alphabet + markers:
-`references/measure-core.md`.
+Every plan unit is claim/outcome-addressable. **Only a verifier flips `[~]→[x]`; a claim never reaches `[x]` on its own.** `dou-index = |[x]| / total`; `[!]`/`[?]` → STOP → recovery-vector. Full alphabet + markers: [references/measure-core.md](references/measure-core.md).
 
-## Critical Rules
+## Critical Rules, Emil Closing & Prompt Verification
 
-- **Research-first is hard-block, not polish.** No plan from memory; derive from repo/runtime truth.
-- **Founder interview or evidence — no self-exemption.** Cite the journal/AICX/brief that carries
-  founder decisions, or ask before shaping.
-- **A brief for every cut — no exceptions.** Per-cut briefs are the hard-gate (Phase 5). A plan
-  whose cuts lack briefs is a shell; the scaffold-doctor refuses to hand it off.
-- **A DRIVER.md — no exceptions (Phase 5.5).** The Founder hand-off driver (full paths · why-annotated
-  graph · ready commands · the `[ ]→[x]` rule verbatim · status snapshot · the Odbiór reception matrix)
-  is part of the scaffold-doctor gate. A plan a human can't drive from one file when the loop dies is
-  not handoff-ready.
-- **Every requirement starts `[ ]` and three signatures close a plan (R12, Founder 2026-09-15).**
-  Acceptance bullets and matrix boxes all start `[ ]`; the worker flips its own boxes as part of
-  delivery, the supervisor refuses to verify a cut with unflipped Acceptance boxes, and no flip is
-  believed — verifiers decide. `Founder [x]` without `acceptance/founder.json` is a forged
-  signature and scaffold-doctor refuses the plan.
-- **Durable artifacts NEVER go to `/tmp`, and NEVER into the product checkout.** `/tmp` is ephemeral
-  scratch only — it is wiped, untracked, and invisible to the Founder's tooling and sync. The product
-  checkout carries code and product documentation only (the ignored private Operator journal is
-  the explicit exception): a plan, brief, DRIVER, tracker, report,
-  or design doc dropped into the tree (e.g. `docs/plans/`) dirties the worktree, poisons structural
-  snapshots with a false dirty-worktree signal, and risks committing dispatch ephemera to the product.
-  Every durable artifact lands in the **canonical plan root**:
-  `~/.vibecrafted/artifacts/<org>/<repo>/<DATE>/plans/<plan_id>/`
-  (mirrors the reports layout; `<org>/<repo>` comes from the git remote identity, never from the
-  checkout path). Writing a durable artifact to `/tmp` or into the checkout is a process failure,
-  not a shortcut.
-- **manifest.json is mandatory.** It is the only artifact inventory and role contract. No `operator/`
-  mirror, duplicate, filename-role inference, or compatibility symlink may become a second writable truth.
-- **A `.dispatch.toml` artifact is mandatory.** Validate `vibecrafted.dispatch.v1` with dispatcher doctor and hand
-  lifecycle execution to `/vc-ship`, or the explicit Founder-ordered bounded dispatcher route;
-  manual per-task workflows are emergency recovery only.
-- **Serve, don't interrogate.** Render editable artifacts and review them through `vibecrafted-server`;
-  the Founder edits the plan, not answers twenty mid-scaffold questions.
-- **Measure, don't claim.** A cut is done when its verifier is green, never when an agent says so.
-- **Map before designing.** Respect the grain of the existing system; loctree before assumptions.
-- **Scope is your best friend.** Tight scope + great execution beats loose scope every time.
-- **Write for an absent operator.** The artifact speaks for itself; the next READ falsifies it
-  without a human on the other side.
-- **Keep dependencies shallow.** Prefer independent workstreams; sequential A→B→C kills parallelism.
-- **No premature optimization / no invented patterns.** The best architecture is the one that ships.
+- **Hard gates:** research-first (`vc-init` + Loctree), founder interview/AICX evidence, per-cut briefs, `DRIVER.md`, `manifest.json`, `.dispatch.toml` (`vibecrafted.dispatch.v1`), `scaffold-doctor`, and three-signature R12 closure (`Founder [x]` only with `acceptance/founder.json`).
+- **Storage hygiene:** durable artifacts NEVER go to `/tmp` or into the product checkout — only to `~/.vibecrafted/artifacts/<org>/<repo>/<DATE>/plans/<plan_id>/`. Operator's sole journal is ignored `.vibecrafted/THE_JOURNAL.md`.
+- **Emil closing & verification:** every master plan, DRIVER, and brief ends with a unique motivational line, concrete CTA, and task-specific suchar + kaomoji ([Emil rail](../vc-operator/DISPATCH.md#closing-rail--the-emil-default-block)). Carry [Verification Rule](../VERIFICATION_RULE.md) into worker prompts; skill edits regenerate `SKILL_PROVENANCE.json` (`make skills-check UPDATE=1`).
 
-## Mandatory plan closing — Emil spirit
-
-Founder reaffirmed this on 2026-09-07; the earlier Founder-authored Emil Kurier
-instruction is in AICX Claude session `2b73c9c1-87ef-49ce-a43f-3dc980d7816a`
-(2026-05-26): CTA, a deliberately corny motivational joke, and kaomoji must be
-surprising and unique.
-
-Every master plan, DRIVER, and executable cut brief ends with:
-
-- A short, task-specific motivational line with a kaomoji.
-- **Call to Action:** the concrete next authorized step, its owner, and what they
-  return. Match the current plan state and canonical execution route; a blocked
-  plan calls for resolving its blocker, not pretending it is ready to launch.
-- **Suchar:** a fresh, deliberately corny joke related to this task, with a kaomoji.
-  Write it for this plan; do not recycle a stock punchline across the package.
-
-Use the existing [Emil closing rail](../vc-operator/DISPATCH.md#closing-rail--the-emil-default-block)
-for presentation. Preserve this voice in Polish and English plans. Keep the close
-brief; humor never substitutes for acceptance criteria or claims unverified success.
-
-## What Success Looks Like
-
-- A cold fleet (or human) executes the plan **without asking a question** mid-flight.
-- Every cut has a `Vector` and a `delivery-verifier`; the `state` column is machine-readable.
-- Scope boundaries are crystal clear; 3-5 architectural decisions explicit with trade-offs.
-- The plan survives an absent operator: `[x]` is earned, `[?]` is honest, nothing is faked.
-
-## Cross-References
-
-- **vc-init** — bootstraps agent context after scaffolding (the orientation gate).
-- **vc-ship** — the sole normal A→Z executor of a multi-cut scaffold dispatch artifact.
-- **vc-dispatch** — supported Founder-ordered bounded waves; preserves scaffold gates and artifacts.
-- **vc-implement** / **vc-workflow** — bounded WRITE cells selected inside the dispatch contract.
-  **vc-justdo** — standalone posture (prompt-typed; not implement).
-- **vc-review · vc-followup · vc-audit · vc-dou** — the READ phases that falsify each WRITE artifact.
-- **vc-operator** — reads the plan's `state` column and conducts the dispatch (trigger/stop).
-- **vc-research** — triple-agent research for unknowns found during Orient/Falsify.
-
-## Anti-Patterns
-
-- Planning before the orientation gate (composing architecture from memory = silent drift).
-- Shaping without founder answers or a cited prior interview.
-- A "Running This Plan" section made of manual per-task workflow commands.
-- Bare permission to use `--no-verify` without the phase authorization, declared gates,
-  checkpoint report, and integrator admission contract.
-- A 50-page design doc instead of a sharp, measurable plan.
-- Prose instead of a `state` column — the operator can't trigger/stop on prose.
-- Treating an agent's `[~]` claim as `[x]` without a verifier (the optimism trap).
-- STOP-as-surrender (502-and-die) instead of STOP-as-recovery-vector.
-- Breaking all work into sequential dependencies; skipping product identity.
+Full rules, Emil closing, cross-references, anti-patterns & prompt verification: [references/rules-and-closing.md](references/rules-and-closing.md).
 
 ## Additional Resources
 
-- **`references/measure-core.md`** — `[ ][~][?][!][x]` alphabet, invariant, Vector→Δ, marker taxonomy.
-- **`references/cadence.md`** — VC-ship read/write cadence (order, WRITE/READ, handoff, planning rules).
-- **`references/output-shapes.md`** — the three scale shapes + 12-section dispatch template + tracker.
-- **`references/plan-template.md`** — the SCAFFOLD.md output format (now with Vector + state + verifier).
-- **`references/compile-embargo.md`** — canonical phase-aware embargo contract: authorized local
-  worker checkpoints, independent integrator admission, and deferred-gate closure.
-
----
-
-## Verification carries into the prompt
-
-Delivery-proof semantics live in `vibecrafted_core.delivery`; see
-`docs/runtime/DELIVERY_PROOF_KERNEL_v1.md`.
-
-Every prompt this skill composes must carry the [Verification Rule](../VERIFICATION_RULE.md) into the worker's dispatch: walk-around verification (gates green ≠ works) + loct literal-vs-semantic. See `vc-operator/DISPATCH_TEMPLATE.md` Sections 6 + 9.
-
-Skill-byte edits regenerate `vibecrafted-core/vibecrafted_core/skills/SKILL_PROVENANCE.json`
-with `make skills-check UPDATE=1` (tracked generator: `scripts/gen_skill_provenance.py`).
-Respect a separately owned generator cut and preserve historical entries; the integrator
-regenerates the combined manifest after admission. The Operator's sole decision journal is
-ignored `<repo-root>/.vibecrafted/THE_JOURNAL.md`, never a tracked plan artifact. Workers
-write launcher-supplied reports preserving machine-owned identity, not the Operator journal.
+- **`references/measure-core.md`** · **`references/cadence.md`** · **`references/output-shapes.md`** · **`references/plan-template.md`** · **`references/compile-embargo.md`**
+- **`references/phases-and-operator.md`** · **`references/artifacts-and-gates.md`** · **`references/rules-and-closing.md`**
 
 _𝚅𝚒𝚋𝚎𝚌𝚛𝚊𝚏𝚝𝚎𝚍. with AI Agents by Vetcoders (c)2024-2026 LibraxisAI_

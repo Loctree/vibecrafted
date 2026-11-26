@@ -55,21 +55,9 @@ dogfooding: "required for repo-impacting work"
 > Standalone. Non-pipeline. Daily rescue when energy is low and the work is not.
 > Take the task. Deliver. Prove it.
 
-## Taxonomy
+## Taxonomy & Two Modes
 
-```yaml
-vc-justdo:
-  kind: standalone_posture_skill
-  pipeline: none # NON-pipeline — not a VC-ship cadence phase (vc-implement is)
-  posture: vc-ownership
-  task_type: defined_by_prompt # implement | review | audit | research | fix | anything
-  scope: interactive_or_headless_session
-  questions: none # interactive: explore instead of interrogating
-```
-
-Skill invocation ≠ runtime invocation. `$vc-justdo` in chat = agent adopts the
-Just Do posture. `vibecrafted justdo <agent>` / `vc-justdo <agent>` = separate
-runtime run with skill id `justdo`.
+`vc-justdo` is a **standalone, non-pipeline posture skill** (`vc-ownership`), where the **prompt defines the task type** (implement · review · audit · research · fix · recon · anything). Non-interactive (`vibecrafted justdo <agent>` / `vc-justdo <agent>`) treats the prompt as closed for questions; interactive (`/vc-justdo` / `$vc-justdo`) explores proactively instead of interrogating. Full YAML taxonomy and CLI examples: [references/posture-and-examples.md](references/posture-and-examples.md).
 
 ## Living Tree / Worktree Rule
 

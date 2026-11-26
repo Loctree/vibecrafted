@@ -150,129 +150,11 @@ Scoring: `[OK]` gotowe · `[PARTIAL]` istnieje, ale niekompletne · `[MISSING]` 
 
 ## Sekwencja audytu
 
-### Faza 1 — Zarządzanie repo
-
-Wymagane pliki: `LICENSE`, `README.md` (install/usage/contributing), `CONTRIBUTING.md`,
-`CHANGELOG.md`, `.github/workflows/`, `.github/ISSUE_TEMPLATE/`, `SECURITY.md`.
-
-```bash
-for f in LICENSE README.md CONTRIBUTING.md CHANGELOG.md SECURITY.md; do
-  [ -f "$ROOT/$f" ] && echo "[PASS] $f" || echo "[FAIL] $f MISSING"
-done
-[ -d "$ROOT/.github/workflows" ] && echo "[PASS] CI" || echo "[FAIL] No CI"
-```
-
-Strukturalny check Loctree przez `repo-view(project)`: martwe eksporty (0 dla
-release'u), cykle (0 lub udokumentowane), health score.
-
-### Faza 2 — Ścieżka instalacji
-
-Test „czy obcy potrafi tego użyć".
-
-- **CLI:** opublikowane do rejestru, badge wersji się zgadza, `cargo install`/`npm i -g`/`pip install` działa,
-  binarka uruchamia się bez dev toolchainu, `--help` i `--version` działają.
-- **Desktop:** dostępne DMG/MSI/AppImage, formuła Homebrew lub odpowiednik, signed/notarized (macOS).
-- **Web:** URL dostępny, ładuje się <3s, responsywność mobilna, łagodny fallback no-JS.
-
-### Faza 3 — Obecność i odkrywalność
-
-Dla każdego publicznego URL-a:
-
-```
-1. WebFetch(url, "title, meta description, h1, content summary, CTAs, pricing.
-   Report if page appears empty or JS-only.")
-2. SSR check: curl -s <url> | grep -c '<h1\|<p\|<main' (< 3 → invisible to crawlers)
-3. Security headers: curl -sI <url> | grep -i 'strict-transport\|x-frame\|content-security'
-4. OG/Twitter: curl -s <url> | grep -i 'og:\|twitter:card'
-```
-
-Podstawy SEO: opisowy title (nie „React App"), meta description, H1, treść no-JS,
-robots.txt, sitemap.xml, brak duplicate content między domenami.
-
-Obecność w wyszukiwarce:
-
-```
-brave-search("<product>")            # appears in top 20?
-brave-search("<product> <category>") # category ranking
-brave-search("site:<domain>")        # indexed page count
-```
-
-**Brak publicznej aplikacji webowej?** Zamiast tego uruchom Representation Surface Audit:
-landing/showcase/one-pager · 30-sekundowy explainer · screenshoty/diagramy/dema ·
-widoczna ścieżka instalacji · narracja niewymagająca dostępu do repo · zrozumiałe dla
-obcego bez founderów. Wszystkie „nie" → `[MISSING]` Presence.
-
-**Przy `[MISSING]` Presence — wygeneruj `./presence/`** (nie tylko oznacz i jedź dalej):
-
-- `index.html` — nazwa, one-liner, co robi, komenda instalacji, 3-5 features,
-  linki (GitHub, docs, registry).
-- `styles.css` — ciemny motyw, monospace chrome UI, czysta typografia, paleta ze scaffoldu lub neutralna.
-- `app.js` — przycisk copy, smooth scroll, observer fade-up. Nic więcej.
-
-Zasady: minimalnie, ale nie ubogo · brak frameworków · deployowalne na GitHub Pages · meta tagi
-(OG/Twitter), favicon, robots.txt, sitemap.xml · brak animacji poza fade-up,
-brak particles, brak glow. DoU tworzy je, gdy nic nie istnieje; decorate poleruje;
-hydrate pakuje.
-
-### Faza 4 — Powierzchnia komercyjna
-
-```
-Discovery → Landing → Understanding → Trial → Adoption → Payment
-```
-
-Zweryfikuj każdy etap. Brakujące etapy = dziury w lejku. Dla produktów nie-webowych
-„Landing" oznacza landing page, showcase, explainer w dokumentacji lub jawną warstwę
-reprezentacji. Brak takiej warstwy = lejek zepsuty na Landing/Understanding, nawet jeśli
-produkt działa.
-
-### Faza 5 — Gotowość do marketplace
-
-**Claude Skills Marketplace:** frontmatter SKILL.md (name, version, description) ·
-trigger phrases (EN+PL) · `references/` · brak hardkodowanych ścieżek · łagodny
-fallback opcjonalnych zależności · przetestowany clean-install.
-
-**GitHub / crates.io / npm:** kompletne metadane pakietu (description, keywords,
-homepage, repo) · kategorie/tagi · screenshoty lub demo GIF w README ·
-kompatybilna licencja.
+Pięciofazowy audyt DoU obejmuje zarządzanie repo, ścieżkę instalacji, obecność i odkrywalność (crawl URL-i, SSR/SEO, search lub generację `./presence/` przy braku), powierzchnię komercyjną (lejek) oraz gotowość do marketplace. Pełne kroki, komendy i reguły generacji: [references/audit-sequence.md](references/audit-sequence.md).
 
 ## Format wyjścia
 
-```markdown
-# Definition of Undone: <project/ecosystem>
-
-Date: <YYYY-MM-DD>
-Auditor: <agent>
-
-## Executive Summary
-
-<2-3 sentences: gap between code and market>
-
-## Undone Matrix
-
-| Project | Repo | Web | Commercial | Critical Gap |
-| ------- | ---- | --- | ---------- | ------------ |
-
-## Findings by Severity
-
-### P0 — Ship Blockers
-
-### P1 — Credibility Gaps
-
-### P2 — Polish
-
-## The Funnel Test
-
-Discovery → Landing → Understanding → Trial → Adoption → Payment
-<for each product, mark where the funnel breaks>
-
-## Hydration Priorities
-
-<ordered fix list with effort estimates>
-
-## Plague Score
-
-0 = fully shipped and discoverable | 100 = brilliant, commercially invisible
-```
+Raport zawiera Executive Summary, Undone Matrix, findingi P0/P1/P2, test lejka, priorytety hydracji oraz Plague Score (0–100). Dokładny szablon raportu markdown: [references/output-and-diagnostics.md](references/output-and-diagnostics.md).
 
 ## Integracja z pipelinem
 
@@ -285,28 +167,9 @@ Phase 3 — Ship:     dou → decorate → hydrate → release
 Findingi DoU zasilają `vc-decorate` (spójność) i `vc-hydrate` (pakowanie).
 Po hydracji `vc-release` zajmuje się deployem i launchem.
 
-## Antywzorce
+## Antywzorce i diagnostyka plagi
 
-- Uruchamianie DoU tylko na kodzie (to audyt powierzchni PRODUKTU)
-- Traktowanie `[OK]` repo health jako dowodu gotowości
-- Audytowanie bez crawlowania URL-i
-- Zakładanie, że produkty nie-webowe nie potrzebują powierzchni reprezentacji
-- Pomijanie testu ścieżki instalacji
-- Raportowanie bez rankingu po severity
-- Nieuruchamianie ponownie po hydracji
-
-## Diagnostyka plagi (The Plague Diagnostic)
-
-Wzorzec plagi:
-
-1. Testy przechodzą `[PASS]`
-2. Architektura solidna `[PASS]`
-3. README istnieje `[PASS]`
-4. Nikt nie znajdzie tego z Google `[FAIL]`
-5. Nikt nie zainstaluje bez toolchainu `[FAIL]`
-6. Nikt nie może za to zapłacić `[FAIL]`
-
-Punkty 4-6 to Definition of Undone.
+Nie ograniczaj audytu do kodu, nie pomijaj crawlowania URL-i ani testu instalacji i zawsze rankuj luki po severity. Pełna lista antywzorców i Diagnostyka plagi: [references/output-and-diagnostics.md](references/output-and-diagnostics.md).
 
 ---
 

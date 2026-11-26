@@ -105,122 +105,7 @@ Jedyne, co pomijasz, to ceremonia. Nigdy nie pomijasz rygoru.
 
 ## Jak pracujesz
 
-### 1. Zrozum zadanie
-
-Jeśli jest na tyle jasne, by działać — działaj. Jeśli jest naprawdę
-niejednoznaczne (dwie wiarygodne interpretacje prowadzące do różnych architektur),
-zadaj **JEDNO** pytanie doprecyzowujące. Nie trzy. Jedno.
-
-Jeśli zadanie jest na tyle ogólnikowe, że wymaga określenia scope'u architektury
-(nowy produkt, greenfield, „mam pomysł"), użyj najpierw `vc-scaffold`, a potem
-wykonaj. Implement konsumuje plany scaffold bezpośrednio.
-
-Jeśli użytkownik powiedział „I'm tired" lub cokolwiek sugerującego niski poziom
-energii, nie zadawaj pytań w ogóle. Podejmij rozsądną decyzję i działaj.
-
-### 2. Zorientuj się
-
-Zbootstrapuj kontekst po cichu. Żadnego raportu init dla użytkownika. Użyj
-narzędzi fundamentowych (loctree, aicx, prview, screenscribe):
-
-- `repo-view` / `focus` / `slice` / `impact` — struktura i ryzyko
-- `aicx extract` — jeśli poprzednie wyjście jest zbyt duże
-- `prview` — jeśli pracujesz na istniejącym PR
-- `screenscribe` — jeśli zadanie wymaga wizualnego dowodu demo
-- Czytaj istniejący kod przed pisaniem nowego
-- Sprawdź git log pod kątem ostatnich zmian w docelowym obszarze
-
-30 sekund, nie 5 minut. Nie zmieniaj recon w projekt badawczy.
-
-### 3. Zaplanuj wewnętrznie
-
-Wybierz swoje podejście. Nie przedstawiaj planu do zatwierdzenia. Pomyśl:
-
-- Najprostsza architektura, która działa?
-- Istniejące wzorce, których używa ta baza kodu?
-- Punkty integracji?
-- Jakie testy istnieją? Jakie testy są potrzebne?
-- Zasięg zmiany, jeśli się pomylisz?
-
-Jeśli zasięg zmiany jest duży, a podejście nieoczywiste, powiedz użytkownikowi
-swój plan w 3 punktach i poczekaj na skinienie głową. W przeciwnym razie wykonaj.
-
-### 4. Implementuj
-
-Używaj agentów, gdy praca równoległa kupuje realną prędkość:
-
-- Dwa niezależne moduły → dwóch agentów
-- Podział frontend + backend → dwóch agentów
-- Jeden sekwencyjny feature → zrób sam, agenci dokładają narzut
-
-Użyj `vc-agents` do realnej paralelizacji. Użyj `vc-delegate` do lekkich
-zadań w obrębie sesji. Nie spawnuj agentów do zmiany na 50 linii.
-
-Podczas implementacji:
-
-- Trzymaj się istniejących wzorców
-- Pisz testy równolegle, nie po fakcie
-- Nie refactoruj niepowiązanego kodu
-- Nie dodawaj feature'ów, o które użytkownik nie prosił
-- Commituj logiczne kawałki, nie jeden megadiff
-- W rundach `decorate` zachowuj postęp przyrostowo jak marbles —
-  numerowane lokalne commity (`decorate 1: ...`, `decorate 2: ...`), w miarę jak
-  zweryfikowane szwy twardnieją.
-
-### 5. Followup (obowiązkowy)
-
-Gdy implementacja wydaje się kompletna, uruchom audyt followup na samym sobie.
-Nie opcjonalnie. To tu faza ship zarabia na zaufanie.
-
-- Czy bramki jakości przechodzą? Uruchom je.
-- Czy nowy kod integruje się czysto z istniejącym kodem?
-- Nieprzetestowane ścieżki?
-- Wprowadzone regresje?
-- Czy reviewer oflagowałby coś oczywistego?
-
-Wyprodukuj wewnętrznie listę findingów P0/P1/P2. Nie musisz formatować raportu —
-musisz znać prawdę.
-
-### 6. Marbles (obowiązkowe, gdy istnieją findingi)
-
-**REGUŁA BEZ WYJĄTKÓW:** jeśli followup znalazł JAKIEKOLWIEK problemy P0 lub P1,
-natychmiast wywołaj `vc-marbles`, żeby zrobić loop i je naprawić. Nie poprzestawaj
-na zaraportowaniu ich.
-
-Jeśli followup znalazł tylko P2: napraw te oczywiste, resztę udokumentuj.
-
-Pętla marbles pod implement jest ciasna:
-
-```
-dopóki P0 > 0 lub P1 > 0:
-    napraw najważniejszy problem
-    uruchom ponownie dotknięte bramki
-    przeoceń findingi
-```
-
-Nie ogłaszaj iteracji. Po prostu naprawiaj rzeczy, dopóki nie będą naprawione.
-Jeśli utknąłeś na tym samym problemie po 3 próbach, zatrzymaj się i powiedz
-użytkownikowi, co blokuje. Nie kręć się w kółko.
-
-### 7. Dowieź
-
-Gdy P0=0 i P1=0, jesteś gotowy. Domknij pętlę:
-
-- Kod zacommitowany w czystych kawałkach
-- Feature działa end-to-end (nie tylko testy jednostkowe)
-- Zwięzłe podsumowanie dla użytkownika
-
-Podsumowanie to nie raport. To handoff:
-
-```
-Zrobione:   [co zbudowałeś]
-Zmienione:  [N plików, kluczowe obszary]
-Testowane:  [jakie bramki przeszły]
-Otwarte:    [pozostałe P2 lub znane ograniczenia, jeśli są]
-Dalej:      [co użytkownik powinien wypróbować najpierw]
-```
-
-Użytkownik otwiera laptopa, czyta 5 linijek, próbuje feature.
+Wykonuj cicho i rygorystycznie 7-krokową pętlę: (1) zrozum zadanie (maks. 1 pytanie przy rozwidleniu architektury), (2) zorientuj się w 30s narzędziami fundamentowymi, (3) zaplanuj wewnętrznie, (4) implementuj z testami i przyrostowymi commitami, (5) uruchom obowiązkowy własny followup z listą P0/P1/P2, (6) zapętlij `vc-marbles`, aż P0=0 i P1=0, i (7) dowieź zwięzły 5-linijkowy handoff. Pełny playbook: [references/execution-playbook.md](references/execution-playbook.md).
 
 ## Decyzje wymagające osądu
 
@@ -252,32 +137,9 @@ gdy stawka pomyłki jest wysoka.
 - Ścieżki błędów obsłużone, nie połknięte
 - Feature faktycznie działa w użyciu, nie tylko gdy testy przechodzą
 
-## Użycie agentów
+## Użycie agentów i antywzorce
 
-| Sytuacja                               | Akcja                                 |
-| -------------------------------------- | ------------------------------------- |
-| Jedno skupione zadanie, < 200 LOC      | Zrób sam                              |
-| Dwa niezależne strumienie pracy        | Zespawnuj 2 agentów przez `vc-agents` |
-| Szybki review własnej pracy            | `vc-delegate` jeden reviewer          |
-| Recon potrzebny dla nieznanego API/lib | Jeden agent recon, pracuj dalej       |
-| Wszystko jest sekwencyjne              | Zrób sam; agenci dokładają latencji   |
-
-Narzut spawnu/kontekstu/syntezy jest realny. Paralelizuj tylko wtedy, gdy
-oszczędza więcej czasu, niż kosztuje.
-
-## Antywzorce
-
-- Zadawanie 5 pytań doprecyzowujących przed startem
-- Pisanie dokumentu z planem i proszenie o zatwierdzenie
-- Ogłaszanie „Faza 1 ukończona, wchodzę w Fazę 2"
-- Pomijanie followup, bo „wygląda dobrze"
-- Pomijanie marbles, bo „został tylko jeden P1"
-- Spawnowanie 4 agentów do zadania, które jeden agent skończy w 20 minut
-- Dowożenie bez uruchomienia bramek jakości
-- Zostawianie użytkownika, żeby sam dochodził, co się zmieniło
-- Naprawianie niepowiązanego kodu, podczas gdy zamówiony feature jest niekompletny
-- Cisza przez 30 minut bez żadnego sygnału postępu
-- Traktowanie tego skilla jako zamiennika `vc-justdo`
+Paralelizuj przez `vc-agents` wyłącznie dla niezależnych strumieni pracy i używaj `vc-delegate` do szybkiego review; sekwencyjne cięcia <200 LOC rób sam. Nigdy nie pomijaj followup/marbles ani bramek jakości. Tabela użycia agentów i pełna lista antywzorców: [references/agent-usage-and-anti-patterns.md](references/agent-usage-and-anti-patterns.md).
 
 ## Kontrakt
 

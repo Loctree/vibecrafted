@@ -85,33 +85,9 @@ projektu, nie raporty z poprzedniej rundy); **semgrep / lintery** (bieżąca
 powierzchnia jakości); **git status / ostatnie commity**. Bez `vc-init` agent
 wymyśla własną rzeczywistość.
 
-Standardowy launcher:
+Standardowy launcher: `vibecrafted marbles <agent> --count <n> --prompt '...'` (lub `--file <plan>` / `--depth <n>`). W odróżnieniu od `implement`, `marbles` uruchamia świeżych agentów w pętli zbieżności na istniejącym kodzie (`--count` steruje iteracjami).
 
-```bash
-# Single round (3 runs by default):
-vibecrafted marbles codex --prompt 'Fix the 3 failing portable tests'
-vc-marbles codex --prompt 'Harden the installer shell surface'
-
-# Multiple rounds (convergence loop — runtime spawns fresh agent 3..n times)
-vibecrafted marbles codex --count 5 --prompt 'Stabilize until P0=0'
-vc-marbles claude --count 8 --prompt 'Refactor the 1500 LOC monoliths'
-
-# From a plan file:
-vibecrafted marbles codex --file ~/.vibecrafted/artifacts/vetcoders/vibecrafted/2026_0407/plans/marbles-plan.md
-vc-marbles gemini --count 5 --file /path/to/plan.md
-
-# Crawl back into the canonical store then read 'n' recently
-# implemented plans then fill the all the gaps:
-vibecrafted marbles codex --count 10 --depth n
-vc-marbles claude --depth 12 --prompt 'Focus on "vc-followup assumptions from the last 12 plans'
-```
-
-**To nie to samo co `vibecrafted implement codex <plan>`.** `implement`
-to sposób, w jaki kod powstaje. `marbles` to to, co dzieje się po tym, jak kod
-już istnieje, ale wciąż trzeba uczynić go prawdziwym i gotowym do dowiezienia.
-Każda runda owija świeżego agenta w gorącą pętlę zbieżności. `--count` steruje
-liczbą iteracji pętli zewnętrznej.
-
+Pełne przykłady wywołań launchera: [references/launcher-and-await.md](references/launcher-and-await.md).
 ---
 
 ## Doktryna pracy z repozytorium
@@ -140,60 +116,9 @@ o jednej prawdzie.
 
 ## Świadomość kosztu: zimny start, gorąca pętla
 
-`vc-marbles` wygląda na drogi tylko wtedy, gdy każdy run agenta liczy się jako
-świeże zdarzenie. To zły model rozliczania.
+Zimny start jest drogi; powtarzane gorące rundy na tym samym repo, powierzchni zadania, padających bramkach, intencji architektonicznej i prompcie wykorzystują rozgrzany cache do budowania nacisku zbieżności. Utrzymuj podłoże stabilne, aby `vc-polarize` mógł ciąć do jednej prawdy na bazie evidence.
 
-Drogi jest zimny start: czytanie repo, rekonstrukcja intencji, znalezienie
-prawdziwej powierzchni awarii i nauczenie się, gdzie system kłamie. Gdy ten
-kontekst jest już gorący, powtarzane runy marbles po tej samej bounded
-powierzchni to nie marnotrawstwo. To kompresja.
-
-Marbles wykorzystuje rozgrzany cache.
-
-Dobra pętla marbles trzyma podłoże stabilne:
-
-- to samo repozytorium
-- ten sam obszar zadania
-- te same padające bramki
-- ta sama intencja architektoniczna
-- ten sam lub porównywalny prompt
-- mały dystans czasowy między runami
-
-Dzięki temu każdy nowy worker płaci mniej za archeologię i wydaje więcej
-swojego budżetu na delty: przeoczone rysy, fałszywe fixy, kruche założenia
-oraz spory między agentami.
-
-Celem nie są tanie runy. Celem są gęstsze runy.
-
-Jedno izolowane wywołanie agenta daje ci jedną interpretację. Gorąca pętla
-marbles daje ci nacisk zbieżności. Gdy kilku workerów wciąż napiera na tę
-samą powierzchnię, pozostałe spory stają się sygnałem: albo kod wciąż kłamie,
-albo prawda produktu jest rozmazana.
-
-I tu przejmuje pałeczkę `vc-polarize`.
-
-Zasada kosztu:
-
-- jeden zimny run odkrywa kształt
-- powtarzane gorące runy eksponują zbieżność
-- stale pętle generują szum
-- rozproszone pętle niszczą rozgrzany cache
-- `vc-polarize` decyduje, co przetrwa
-
-Nie rozpraszaj runów marbles po niepowiązanych inicjatywach. Nie przepisuj
-bez przerwy powierzchni docelowej, chyba że operator celowo resetuje
-eksperyment. Marbles działa, bo swarm wciąż napiera na te same rysy, aż
-fałszywe naprawy, przepełnione luki i prawdziwe decyzje strukturalne staną
-się widoczne.
-
-Krótko: marbles nie zaczyna od zera przy każdym runie. Trzyma ten sam
-kontekst pracy, tę samą powierzchnię problemu i te same bramki, dzięki czemu
-kolejne workery mniej czasu tracą na archeologię repo, a więcej na brakujące
-luki, fałszywe fixy i kruche założenia. To daje gęstsze, łatwiejsze do
-porównania runy.
-
-Nadmiar jest celowy. Marbles wypełnia za dużo, żeby `vc-polarize` mógł
-ciąć z powrotem do jednej prawdy na podstawie evidence, nie gustu.
+Pełny model kosztu i zasady rozgrzanego cache'u: [references/cost-and-cache-model.md](references/cost-and-cache-model.md).
 
 ## Kiedy używać
 
@@ -231,105 +156,18 @@ siedzi pomiędzy jako READ-ONLY warstwa falsyfikacji.
 
 ---
 
-## Doktryna workera (ślepy z premedytacją)
+## Doktryna workera i instrumenty vs bramki
 
-Worker jest celowo **ślepy na wcześniejszą historię marbles**, pracując
-wyłącznie przeciw **bieżącemu stanowi workspace'u**. Ciężar kontekstu zabija
-jakość — agent pracujący 90 minut podejmuje gorsze decyzje w 91. minucie niż
-świeży agent w 1. minucie, broniąc kosztu utopionego zamiast widzieć drzewo.
-Każda runda dostaje świeży umysł. To nie obejście — to projekt.
+Worker jest celowo **ślepy na wcześniejszą historię marbles**, pracując na bieżącym stanie drzewa, podczas gdy [`RECEPTION.md`](RECEPTION.md) utrzymuje rejestr findingów i decyzje o zbieżności. **Instrumenty** (`loctree`, `semgrep`, `aicx-steer`) idą na **początek**, a **testy** na **koniec** jako bramka weryfikacyjna.
 
-**Warstwa odbioru wyników (reception)** (operator / orchestrator) trzyma rejestr otwartych
-findingów, porównuje kandydatów między równoległymi rundami i decyduje, czy
-uznać zbieżność, czy odpalić kolejną falę. Zobacz
-[`RECEPTION.md`](RECEPTION.md). Nie ładuj warstwy odbioru do kontekstu workera.
-
+Pełna doktryna workera i rozróżnienie instrumenty vs bramki: [references/worker-doctrine-and-instruments.md](references/worker-doctrine-and-instruments.md).
 ---
 
-## Instrumenty vs bramki
+## Model operacyjny, soczewki i reguła commita
 
-**Instrumenty** (loctree, semgrep, aicx-steer) idą na **początek**
-— kierują, gdzie patrzeć (oskarżasz drzewo dowodami, nie przeczuciem).
+Jedno wywołanie = jedna bounded round: oskarż obecne drzewo dowodami, wybierz najwyżej **3 cele** według najsłabszej soczewki (`Access & Isolation`, `Data Health`, `Errors & Observability`, `Release & Runtime Resilience`), utwardź, bramkuj, zrób dokładnie **jeden** commit `marble:` i zapisz raport w `$VIBECRAFTED_HOME/artifacts/.../marbles/reports/`. **Worker zatrzymuje się tutaj** — nie rozszerzaj się na następną rundę (zobacz [`FLOW.md`](FLOW.md) i [`RECEPTION.md`](RECEPTION.md)).
 
-**Testy** (pytest, cargo test, build) idą na **koniec** — weryfikują
-fix (bramka).
-
-Start od testów zawęża pole widzenia do „co pada", zamiast pokazać „co jest kruche".
-Czerwone testy krzyczą najgłośniej, ale prawdziwa strukturalna słabość
-często jest cicha.
-
----
-
-## Model operacyjny (pojedyncza runda)
-
-Jedno wywołanie = jedna bounded round.
-
-1. **Oskarż obecne drzewo.** Każdy cel śledzi się do: outputu narzędzia,
-   padającej bramki, audytu strukturalnego lub kontrprzykładu z ryzyka
-   produkcyjnego. **Bez evidence nie ma celu.**
-2. **Wybierz najmniejszą powierzchnię o dużym wpływie.** Najwyżej **3 cele**
-   na rundę. Preferuj awarie o wysokim severity, ścieżki o wysokiej
-   częstotliwości, ciche tryby awarii, słabe granice, problemy zamykające
-   klasę awarii. Gdy wiele powierzchni nie zgadza się co do rzeczywistości
-   albo kod wymusza ukrytą decyzję produktową, **wyeksponuj ją, ale jej nie
-   rozstrzygaj** — to zadanie `vc-polarize`.
-3. **Utwardź.** Najmniejszy zbiór zmian, który materialnie zwiększa
-   prawdę. Dodaj brakujący scope/auth, brakujące indeksy, zamień
-   połknięte wyjątki na obsługę, po której da się działać, dodaj smoke testy,
-   scal zduplikowane kontrakty, usuń zgniłe wrappery. Aksjomat
-   Vetcoders: **idź dalej ponad wsteczną kompatybilność** — tnij czysto, jeśli
-   lokalna abstrakcja jest zgniła i blokuje stabilizację.
-4. **Bramkuj.** Najwęższe wiarygodne bramki najpierw; szersze, jeśli zasadne.
-   Minimum: składnia / lint dla dotkniętych powierzchni, testy pokrywające
-   utwardzoną ścieżkę, odpowiednie sprawdzenia build/bundle. Jeśli bramka
-   pada: raportuj wprost, podaj liczbę regresji, nie zagrzebuj jej pod narracją.
-5. **Commit.** Dokładnie jeden commit rundy z konwencją poniżej.
-6. **Raport.** Zapisz do
-   `$VIBECRAFTED_HOME/artifacts/<org>/<repo>/<YYYY_MMDD>/marbles/reports/<ts>_marble_<run_or_round_id>_<agent>.md`.
-
-**Worker zatrzymuje się tutaj.** Nie rozszerzaj się samodzielnie na następną
-rundę. Nie pisz instrukcji dla swojego następcy. Warstwa odbioru wyników
-decyduje, co odpala następne.
-
-Pełny detal pojedynczej rundy (instrumenty, soczewki, zasada z szatni)
-mieszka w [`FLOW.md`](FLOW.md). Routing odbioru wyników / zbieżności mieszka w
-[`RECEPTION.md`](RECEPTION.md).
-
----
-
-## Soczewki stabilizacji (Stabilization Lenses)
-
-Jeśli nie ma dokładnego opisu taska, wybierz tę pasującą do najsłabszej żywej powierzchni:
-
-- **Access & Isolation** — auth, scope per tenant, sprawdzenia ról, granice uprawnień
-- **Data Health** — indeksy, plany zapytań, N+1, hotspoty schematu, God Tables
-- **Errors & Observability** — połknięte wyjątki, ciche awarie, brakujące alerty
-- **Release & Runtime Resilience** — bramki CI/CD, smoke testy, bezpieczeństwo rolloutu, dryf konfiguracji
-
-Runda może dotknąć jednej soczewki lub ściśle sprzężonego klastra. Nie wymuszaj
-kolejności filarów, jeśli evidence mówi inaczej.
-
----
-
-## Reguła commita
-
-**Jedna runda = jeden commit.** Bez częściowych commitów. Bez squashowania
-między rundami. Bez kopania w historii gita, żeby ustalić subject line.
-
-Format:
-
-```
-marble: <one-line summary>
-
-- <file>: <what changed and why>
-
-Gate: <pass|fail>
-Tests: <what ran>
-Regressions: <count>
-Round-ID: <opaque-id-if-provided>
-```
-
----
+Pełny 6-krokowy protokół rundy, soczewki stabilizacji i format commita: [references/round-protocol-and-lenses.md](references/round-protocol-and-lenses.md).
 
 ## Strażnik gałęzi i drzewa
 
@@ -342,40 +180,11 @@ failure) w raporcie.
 
 ---
 
-## Złożenie ze skillami sąsiednimi
+## Złożenie ze skillami i antywzorce
 
-- **`vc-init`** — wymagana bramka. Każda runda zaczyna się tutaj.
-- **`vc-audit`** — downstreamowa READ-ONLY falsyfikacja. Audit sprawdza,
-  czy deklarowane fixy swarmu faktycznie wylądowały względem spisanego
-  planu.
-- **`vc-polarize`** — downstreamowy krok WRITE. Po zalewie marbles +
-  verdykcie auditu polarize zdziera z powrotem do jednej prawdy.
-- **`vc-review`** — sąsiednie READ-ONLY review na bounded diffach.
-  Commit rundy marbles można przejrzeć indywidualnie przed kontynuacją
-  swarmu.
-- **`vc-followup`** — sąsiedni READ-ONLY check trajektorii. Użyj po
-  fali marbles, by ocenić zdrowie ogólnego kierunku.
+`vc-marbles` współdziała z `vc-init` (wymagane wejście), `vc-audit` (downstreamowe READ-ONLY), `vc-polarize` (downstreamowe cięcie WRITE do jednej prawdy), `vc-review` oraz `vc-followup`. Unikaj historycznej samoświadomości, cosplayu zbieżności, próżności powierzchni, inflacji narracyjnej, kontaminacji równoległej, rozstrzygania rozmazu produktu w workerze oraz samorozszerzania.
 
----
-
-## Antywzorce
-
-- **Historyczna samoświadomość** — czytanie wcześniejszych artefaktów marbles, by zabrzmieć kompetentnie
-- **Cosplay zbieżności** — gadanie o rozmiarze kroku / delcie / mistrzostwie pętli
-- **Próżność powierzchni** — dotykanie wielu plików, żeby runda wyglądała na większą
-- **Teatr polerowania** — sprzątanie, które nie zamyka żadnego trybu awarii
-- **Kult wstecznej kompatybilności** — zachowywanie zgniłych kontraktów
-- **Inflacja narracyjna** — długie wyjaśnienia ukrywające słabą bramkę
-- **Kontaminacja równoległa** — importowanie kontekstu innego marble'a
-- **Fałszywa wszechwiedza** — udawanie, że widzi się cały globalny backlog
-- **Pogarda wobec agentów** — traktowanie innych agentów jako gorszych; why-matrix to
-  mapa stylów, nie hierarchia wartości
-- **Rozwiązywanie rozmazu produktu w workerze** — eksponuj, nie rozstrzygaj;
-  zostaw to dla polarize
-- **Samorozszerzanie** — pisanie planu następnej rundy z wnętrza tej
-  rundy
-
----
+Pełne złożenie ze skillami sąsiednimi, katalog antywzorców i klamra końcowa: [references/composition-and-antipatterns.md](references/composition-and-antipatterns.md).
 
 ## Warunek zakończenia
 
@@ -399,22 +208,6 @@ równoległych rund. Potem oskarż obecne drzewo.
 
 ## Klamra końcowa
 
-```text
-=======================
-Pamiętaj: tryb marbles to pozwolenie na napisanie małego albo szerzej zakrojonego,
-ale prawdziwego fixa, nie pozwolenie na refactor, chyba że wynika to wprost
-z opisu taska. Nie musisz przejmować się przerośniętym kodem wokół pewnych
-części bazy kodu, ale masz twardy obowiązek opisać go
-w raporcie, jeśli na niego natrafisz.
-Worker widzi drzewo, nigdy fabrykę. Jedna runda, jeden commit, jeden raport.
-Potem wychodzi. Swarm produkuje nadmiar; polarize go zdziera.
-(•̀⌄•́)و ̑̑
-=======================
-
-Suchar: Dlaczego worker marbles nigdy nie kłóci się z następnym workerem?
-Bo do tego czasu już wyszedł z szatni.  (._.)
-```
-
----
+Worker widzi drzewo, nigdy fabrykę: jedna runda, jeden commit, jeden raport, potem wychodzi. Zobacz [references/composition-and-antipatterns.md](references/composition-and-antipatterns.md).
 
 _𝚅𝚒𝚋𝚎𝚌𝚛𝚊𝚏𝚝𝚎𝚍. with AI Agents by Vetcoders (c)2024-2026 LibraxisAI_

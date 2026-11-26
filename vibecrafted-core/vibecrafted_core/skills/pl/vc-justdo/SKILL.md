@@ -48,21 +48,9 @@ language: pl
 > Samodzielny. Non-pipeline. Daily rescue, gdy energia spada, a praca nie.
 > Bierzesz zadanie. Dowozisz. Udowadniasz.
 
-## Taksonomia
+## Taksonomia i dwa tryby
 
-```yaml
-vc-justdo:
-  kind: standalone_posture_skill
-  pipeline: none # NON-pipeline — nie faza cadence VC-ship (tą jest vc-implement)
-  posture: vc-ownership
-  task_type: defined_by_prompt # implement | review | audit | research | fix | anything
-  scope: interactive_or_headless_session
-  questions: none # interactive: eksploracja zamiast interrogacji
-```
-
-Skill invocation ≠ runtime invocation. `$vc-justdo` w czacie = agent przyjmuje
-postawę Just Do. `vibecrafted justdo <agent>` / `vc-justdo <agent>` = osobny run
-runtime ze skill id `justdo`.
+`vc-justdo` to **samodzielny skill postawy poza pipeline'em** (`vc-ownership`), w którym **prompt definiuje typ zadania** (implement · review · audit · research · fix · recon · cokolwiek). Non-interactive (`vibecrafted justdo <agent>` / `vc-justdo <agent>`) traktuje prompt jako zamknięty na pytania; interactive (`/vc-justdo`) eksploruje zamiast pytać. Pełna taksonomia YAML i przykłady CLI: [references/posture-and-examples.md](references/posture-and-examples.md).
 
 ## Living Tree / Worktree Rule
 
@@ -76,7 +64,9 @@ See [Living Tree Rule](../../LIVING_TREE_RULE.md).
 
 Brak pytań do operatora **nie** znaczy brak orientacji. Przed pracą
 repo-specyficzną uruchom/skonsumuj `vc-init`. Loctree to domyślna percepcja
-strukturalna — użyj jej przed szerokim grepem. Brak `vc-init`/Loctree evidence =
+strukturalna — użyj skilla `Loctree:loctree` przed szerokim grepem (`context` /
+`slice` / `impact` / `find`), aby zbudować lub odświeżyć
+Code-Derived Application Map. Brak `vc-init`/Loctree evidence =
 process failure. No-repo/no-code → zadeklaruj no-repo exception.
 
 ## Postawa (rdzeń)

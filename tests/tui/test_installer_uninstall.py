@@ -68,8 +68,16 @@ def _legacy_shim_public_name(name: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_uninstall_from_live_runtime(monkeypatch) -> None:
+def _isolate_uninstall_from_live_runtime(monkeypatch, tmp_path) -> None:
     """A unit-test HOME must never inspect or mutate the host's real LaunchAgent."""
+    monkeypatch.setenv("HOME", str(tmp_path / "isolated-home"))
+    monkeypatch.setenv(
+        "VC_FRAME_SOCKET_DIR", str(tmp_path / "isolated-vc-frame-sockets")
+    )
+    monkeypatch.setenv(
+        "VIBECRAFTED_SYSTEM_APPLICATIONS_DIR",
+        str(tmp_path / "isolated-applications"),
+    )
     monkeypatch.setattr(installer, "_runtime_loaded_service_home", lambda: None)
     monkeypatch.setattr(installer, "_runtime_service_snapshot", lambda _home: None)
     monkeypatch.setattr(installer, "_darwin_process_ids", tuple)
@@ -2318,7 +2326,7 @@ def test_cmd_uninstall_removes_launchers_and_compat_pack_wrappers(
     assert not (store_path / "vc-init").exists()
     assert not (home / ".codex" / "skills" / "vc-init").exists()
 
-    backup_root = installer._backup_root(store_path)
+    backup_root = installer._teardown_backup_root()
     latest = (backup_root / "latest").read_text(encoding="utf-8").strip()
     manifest = json.loads(
         (backup_root / latest / "restore-manifest.json").read_text(encoding="utf-8")
@@ -2380,7 +2388,7 @@ def test_cmd_uninstall_aborts_file_removal_when_runtime_teardown_fails(
     assert (home / ".local" / "bin" / "vibecrafted").exists()
 
 
-def test_cmd_uninstall_classifies_state_home_and_removes_only_runtime_state(
+def test_cmd_uninstall_classifies_then_backs_up_and_removes_state_home(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     _home, crafted_home, _store, _helper, _zshrc = _setup_installed_surface(
@@ -2429,8 +2437,10 @@ def test_cmd_uninstall_classifies_state_home_and_removes_only_runtime_state(
     assert installer.cmd_uninstall(Namespace(dry_run=False)) == 0
     capsys.readouterr()
     assert all(not path.exists() for path in runtime_paths)
-    assert all((path / "keep.md").is_file() for path in founder_paths)
-    assert unknown.read_bytes() == b"founder-export"
+    assert all(not path.exists() for path in founder_paths)
+    assert not unknown.exists()
+    assert not crafted_home.exists()
+    assert {crafted_home / "artifacts", unknown} <= _latest_backup_paths()
     # Union with v5 UDS: installer-loaded runtime_paths still owns the socket path.
     sock = installer._runtime_paths.run_signal_socket_path("union-uninstall")
     assert len(os.fsencode(sock)) < 104
@@ -2666,7 +2676,10 @@ def test_owned_runtime_census_matches_product_processes_without_killing_editors(
 ) -> None:
     home = tmp_path / "home"
     runtime_releases = home / "runtime/releases"
-    app_executable = Path("/Applications/Vibecrafted.app/Contents/MacOS/Vibecrafted")
+    app_executable = (
+        Path(os.environ["VIBECRAFTED_SYSTEM_APPLICATIONS_DIR"])
+        / "Vibecrafted.app/Contents/MacOS/Vibecrafted"
+    )
     custom_app = home / "Applications/Vibecrafted-Recovery-Test.app"
     births = {pid: (f"darwin:{pid}:1", os.geteuid(), 8) for pid in range(101, 108)}
     births[106] = ("darwin:106:1", os.geteuid() + 1, 8)
@@ -3043,10 +3056,9 @@ def test_cmd_uninstall_removes_release_contract_assets_with_managed_payload(
         )
     assert not managed_payload.exists()
     assert all(not asset.exists() for asset in contract_assets)
-    assert (unmanaged_sibling / "keep.txt").read_text(encoding="utf-8") == "keep\n"
+    assert not unmanaged_sibling.exists()
 
-    store_path = installer.vibecrafted_home() / "skills"
-    backup_root = installer._backup_root(store_path)
+    backup_root = installer._teardown_backup_root()
     latest = (backup_root / "latest").read_text(encoding="utf-8").strip()
     restore_manifest = json.loads(
         (backup_root / latest / "restore-manifest.json").read_text(encoding="utf-8")
@@ -3055,6 +3067,9 @@ def test_cmd_uninstall_removes_release_contract_assets_with_managed_payload(
         item for item in restore_manifest["items"] if Path(item["path"]) == owner.path
     ]
     assert len(owner_records) == 1
+    assert unmanaged_sibling in {
+        Path(item["path"]) for item in restore_manifest["items"]
+    }
 
     assert installer.cmd_restore(Namespace(dry_run=False)) == 0
     assert {asset: asset.read_bytes() for asset in contract_assets} == expected_bytes
@@ -3126,13 +3141,13 @@ def test_cmd_uninstall_prefers_manifest_tracked_launchers_and_helpers(
     assert not helper_file.exists()
     assert manual_helper.exists()
     assert not (local_bin / "vibecrafted").exists()
-    assert (local_bin / "vc-help").is_symlink()
-    assert (local_bin / "vc-workflow").is_symlink()
+    assert not (local_bin / "vc-help").is_symlink()
+    assert not (local_bin / "vc-workflow").is_symlink()
     assert installer._launcher_path_line() not in zshrc.read_text(encoding="utf-8")
     assert not (runtime_skills / "vc-init").exists()
     assert (local_bin / "unrelated-tool").exists()
 
-    backup_root = installer._backup_root(store_path)
+    backup_root = installer._teardown_backup_root()
     latest = (backup_root / "latest").read_text(encoding="utf-8").strip()
     manifest = json.loads(
         (backup_root / latest / "restore-manifest.json").read_text(encoding="utf-8")
@@ -3141,7 +3156,7 @@ def test_cmd_uninstall_prefers_manifest_tracked_launchers_and_helpers(
     # The shim lives in the product shell tree, so the backup may carry it as
     # the file itself or inside its backed-up parent directory.
     assert any(path == helper_file or path in helper_file.parents for path in backed)
-    assert "vc-help" not in {path.name for path in backed}
+    assert "vc-help" in {path.name for path in backed}
 
 
 def test_restore_roundtrip_recovers_launchers_and_runtime_symlinks(
@@ -3187,8 +3202,6 @@ def test_cmd_uninstall_cleans_launcher_only_surface_without_manifest(
 ) -> None:
     home = tmp_path / "home"
     crafted_home = home / ".vibecrafted"
-    store_path = crafted_home / "skills"
-
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     monkeypatch.setenv("VIBECRAFTED_HOME", str(crafted_home))
@@ -3219,7 +3232,7 @@ def test_cmd_uninstall_cleans_launcher_only_surface_without_manifest(
         assert not (launcher_bin_dir / "vc-workflow").exists()
     assert installer._launcher_path_line() not in zshrc.read_text(encoding="utf-8")
 
-    backup_root = installer._backup_root(store_path)
+    backup_root = installer._teardown_backup_root()
     latest = (backup_root / "latest").read_text(encoding="utf-8").strip()
     manifest = json.loads(
         (backup_root / latest / "restore-manifest.json").read_text(encoding="utf-8")
@@ -3282,7 +3295,7 @@ def test_deck_launcher_forwards_uninstall_argv(tmp_path, monkeypatch) -> None:
 
 def _latest_backup_paths() -> set[Path]:
     """Absolute paths captured by the newest teardown restore manifest."""
-    backup_root = installer._backup_root(installer.vibecrafted_home() / "skills")
+    backup_root = installer._teardown_backup_root()
     latest = (backup_root / "latest").read_text(encoding="utf-8").strip()
     manifest = json.loads(
         (backup_root / latest / "restore-manifest.json").read_text(encoding="utf-8")
@@ -3326,13 +3339,15 @@ def test_cmd_uninstall_removes_framework_runtime_payload_by_name(
 
     for path in owned:
         assert not path.exists()
-    assert (stranger / "keep.txt").read_text(encoding="utf-8") == "keep\n"
-    # Backup-before-remove: every newly owned path must be restorable.
+    assert not stranger.exists()
+    # Backup-before-remove: every owned path must be restorable.
     assert set(owned) <= _latest_backup_paths()
+    assert stranger in _latest_backup_paths()
 
     assert installer.cmd_restore(Namespace(dry_run=False)) == 0
     assert (runtime_home / "releases" / "4.1.0" / "payload.txt").is_file()
     assert active.is_file()
+    assert (stranger / "keep.txt").read_text(encoding="utf-8") == "keep\n"
 
 
 def test_cmd_uninstall_removes_installer_staging_siblings(
@@ -3366,14 +3381,14 @@ def test_cmd_uninstall_removes_installer_staging_siblings(
     assert not handoff.exists()
     assert not lease.exists()
     assert not finder_metadata.exists()
-    assert (stranger / "keep.txt").read_text(encoding="utf-8") == "keep\n"
-    assert {staging, handoff, lease} <= _latest_backup_paths()
+    assert not stranger.exists()
+    assert {staging, handoff, lease, stranger} <= _latest_backup_paths()
 
 
-def test_cmd_uninstall_keeps_operator_secrets_in_framework_config(
+def test_cmd_uninstall_backs_up_operator_secrets_in_framework_config(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """`~/.config/vibecrafted` is framework-generated, but `*.env` holds live tokens."""
+    """Credentials leave the live path but remain in the private restore kit."""
     _setup_installed_surface(tmp_path, monkeypatch)
     config_root = Path(os.environ["XDG_CONFIG_HOME"])
     vib_config = config_root / "vibecrafted"
@@ -3391,15 +3406,15 @@ def test_cmd_uninstall_keeps_operator_secrets_in_framework_config(
 
     assert installer.cmd_uninstall(Namespace(dry_run=False)) == 0
 
-    assert secret.read_text(encoding="utf-8") == "SLACK_BOT_TOKEN=xoxb-live\n"
-    assert vib_config.is_dir()
+    assert not secret.exists()
+    assert not vib_config.exists()
     assert not (vib_config / "themes").exists()
     assert not vc_frame.exists()
     assert not frontier.exists()
 
     backed_up = _latest_backup_paths()
     assert {vib_config / "themes", vc_frame, frontier} <= backed_up
-    assert secret not in backed_up
+    assert secret in backed_up
 
 
 def test_cmd_uninstall_removes_darwin_library_surfaces(
@@ -3459,13 +3474,10 @@ def test_cmd_uninstall_removes_darwin_library_surfaces(
     assert foreign_pref.read_text(encoding="utf-8") == "keep\n"
     assert owned <= _latest_backup_paths()
 
-    # The .app itself ships from the DMG; teardown never deletes it.
-    applications = [
-        record
-        for record in captured
-        if installer._is_subpath(record.path, Path("/Applications"))
-    ]
-    assert all(record.action == "preserve" for record in applications)
+    # The Vibecrafted App is part of the explicitly requested full teardown.
+    applications = [record for record in captured if record.kind == "app-bundle"]
+    assert applications
+    assert all(record.action == "remove" for record in applications)
 
 
 def test_second_uninstall_after_full_teardown_is_a_no_op(
@@ -3498,8 +3510,12 @@ def test_second_uninstall_after_full_teardown_is_a_no_op(
     assert installer.cmd_uninstall(Namespace(dry_run=False)) == 0
     second = capsys.readouterr().out
     assert "Nothing to uninstall" in second
-    assert (stranger / "keep.txt").read_text(encoding="utf-8") == "keep\n"
-    assert (config_root / "vibecrafted" / "slack.env").is_file()
+    assert not stranger.exists()
+    assert not (config_root / "vibecrafted").exists()
+    assert {
+        stranger,
+        config_root / "vibecrafted" / "slack.env",
+    } <= _latest_backup_paths()
 
 
 def test_dry_run_uninstall_leaves_no_new_install_lease(
@@ -3888,3 +3904,199 @@ def test_retired_vc_frame_shim_hands_its_name_only_to_the_admitted_product(
     else:
         assert stale.read_text() == external
         assert stale.is_symlink() == (replacement == "symlink")
+
+
+def test_runtime_teardown_broken_pair_never_uses_install_handoff(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The blacky-tester failure must converge to teardown, not an OSError."""
+    home = tmp_path / "home"
+    shared_home = home / ".vibecrafted"
+    launcher = home / ".local/bin/vibecrafted"
+    shared_home.mkdir(parents=True)
+    _write_executable(launcher)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("VIBECRAFTED_HOME", str(shared_home))
+    monkeypatch.setenv("VIBECRAFTED_LAUNCHER_BIN", str(launcher.parent))
+    monkeypatch.setattr(installer.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        installer, "_current_tools_link", lambda _home: tmp_path / "current"
+    )
+    monkeypatch.setattr(
+        installer,
+        "_tools_install_lease",
+        lambda _link, *, operation: nullcontext(9),
+    )
+    monkeypatch.setattr(
+        installer, "_inherited_tools_install_lease", lambda _descriptor: nullcontext()
+    )
+    monkeypatch.setattr(installer.os, "set_inheritable", lambda _fd, _value: None)
+    monkeypatch.setattr(
+        installer, "_assert_runtime_loaded_service_owner", lambda _home: shared_home
+    )
+    monkeypatch.setattr(installer, "_runtime_service_has_evidence", lambda _home: True)
+
+    def broken_snapshot(_home: Path):
+        raise OSError(
+            "runtime server/guardian identity is uncertain; refusing install handoff "
+            "(server or embedded Guardian is not ready)"
+        )
+
+    monkeypatch.setattr(installer, "_runtime_service_snapshot", broken_snapshot)
+    commands: list[tuple[str, ...]] = []
+
+    def run_command(
+        _launcher: Path, _home: Path, *arguments: str
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(arguments)
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(installer, "_run_runtime_service_command", run_command)
+
+    actions = installer._teardown_owned_runtime_for_uninstall(
+        shared_home, dry_run=False
+    )
+
+    assert commands == [("service", "uninstall")]
+    assert any("uninstall" in action for action in actions)
+
+
+def test_cmd_uninstall_external_backup_leaves_zero_owned_residue(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    home, crafted_home, _store, _helper, _zshrc = _setup_installed_surface(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(installer.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        installer, "_teardown_owned_runtime_for_uninstall", lambda *_args, **_kwargs: ()
+    )
+
+    founder_report = crafted_home / "artifacts" / "reports" / "report.md"
+    founder_report.parent.mkdir(parents=True)
+    founder_report.write_text("keep me in the restore kit\n", encoding="utf-8")
+    unknown = crafted_home / "export.png"
+    unknown.write_bytes(b"founder-export")
+    runtime_home = installer.vibecrafted_runtime_home()
+    recovery = runtime_home / ".installer-backups" / "snapshot.json"
+    recovery.parent.mkdir(parents=True)
+    recovery.write_text("{}\n", encoding="utf-8")
+    (runtime_home / "legacy-receipt.json").write_text("{}\n", encoding="utf-8")
+    config_secret = Path(os.environ["XDG_CONFIG_HOME"]) / "vibecrafted" / "slack.env"
+    config_secret.parent.mkdir(parents=True, exist_ok=True)
+    config_secret.write_text("TOKEN=secret\n", encoding="utf-8")
+    frame_data = home / ".local" / "share" / "vc-frame" / "session.json"
+    frame_data.parent.mkdir(parents=True)
+    frame_data.write_text("{}\n", encoding="utf-8")
+    charter = home / ".codex" / "AGENTS.md"
+    charter.write_text("user charter\n", encoding="utf-8")
+    protected_hook = home / ".claude" / "hooks" / "aicx-postcompact.sh"
+    protected_hook.parent.mkdir(parents=True)
+    protected_hook.write_text("protected\n", encoding="utf-8")
+
+    assert installer.cmd_uninstall(Namespace(dry_run=False)) == 0
+    capsys.readouterr()
+
+    for root in (
+        crafted_home,
+        runtime_home,
+        config_secret.parent,
+        frame_data.parent,
+    ):
+        assert not root.exists(), f"owned residue remains: {root}"
+    assert (home / ".local" / "bin" / "unrelated-tool").is_file()
+    assert charter.read_text(encoding="utf-8") == "user charter\n"
+    assert protected_hook.read_text(encoding="utf-8") == "protected\n"
+
+    backup_root = installer._teardown_backup_root()
+    assert backup_root == home / "Backups" / "Vibecrafted"
+    latest = (backup_root / "latest").read_text(encoding="utf-8").strip()
+    backup_dir = backup_root / latest
+    manifest = json.loads((backup_dir / "restore-manifest.json").read_text())
+    items = {Path(item["path"]): item for item in manifest["items"]}
+    assert crafted_home / "artifacts" in items
+    assert unknown in items
+    assert recovery.parent in items
+    assert config_secret in items
+    assert frame_data.parent in items
+    restored_secret = backup_dir / items[config_secret]["backup"]
+    assert restored_secret.read_text(encoding="utf-8") == "TOKEN=secret\n"
+    assert (backup_dir / installer.RESTORE_SCRIPT_FILE).is_file()
+
+    assert installer.cmd_uninstall(Namespace(dry_run=False)) == 0
+    assert "Nothing to uninstall" in capsys.readouterr().out
+
+
+def test_uninstall_inventory_owns_all_launchagents_apps_and_sockets(
+    tmp_path: Path, monkeypatch
+) -> None:
+    home, _crafted_home, _store, _helper, _zshrc = _setup_installed_surface(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(installer.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        installer, "_teardown_owned_runtime_for_uninstall", lambda *_args, **_kwargs: ()
+    )
+    launchagents = home / "Library" / "LaunchAgents"
+    launchagents.mkdir(parents=True)
+    owned_plists = (
+        launchagents / "io.vetcoders.vibecrafted.server.plist",
+        launchagents / "com.vetcoders.vibecrafted-slack-bridge.plist",
+        launchagents / "com.vetcoders.vc-guardian.plist",
+    )
+    for path in owned_plists:
+        path.write_text("owned\n", encoding="utf-8")
+    foreign_plist = launchagents / "com.apple.finder.plist"
+    foreign_plist.write_text("keep\n", encoding="utf-8")
+    sockets = tmp_path / "owned-vc-frame-sockets"
+    monkeypatch.setenv("VC_FRAME_SOCKET_DIR", str(sockets))
+    sockets.mkdir(parents=True)
+
+    captured: list[installer.ManagedPath] = []
+    build_inventory = installer._build_uninstall_inventory
+
+    def capture_inventory(**kwargs) -> list[installer.ManagedPath]:
+        inventory = build_inventory(**kwargs)
+        captured[:] = inventory
+        return inventory
+
+    monkeypatch.setattr(installer, "_build_uninstall_inventory", capture_inventory)
+    assert installer.cmd_uninstall(Namespace(dry_run=True)) == 0
+
+    records = {record.path: record.action for record in captured}
+    for path in (
+        *owned_plists,
+        sockets,
+        Path(os.environ["VIBECRAFTED_SYSTEM_APPLICATIONS_DIR"]) / "Vibecrafted.app",
+        home / "Applications" / "Vibecrafted.app",
+    ):
+        assert records.get(path) == "remove", (path, records.get(path))
+    assert foreign_plist not in records
+
+
+def test_teardown_backup_refuses_a_root_inside_the_removed_tree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    removed = tmp_path / "state"
+    removed.mkdir()
+    (removed / "state.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("VIBECRAFTED_TEARDOWN_BACKUP_HOME", str(removed / "backups"))
+    with pytest.raises(RuntimeError, match="would be consumed"):
+        installer.create_teardown_backup(
+            [installer.ManagedPath("state-home", removed, "remove", "test")]
+        )
+
+
+def test_runtime_launchctl_honors_the_isolated_executable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    log = tmp_path / "launchctl.log"
+    launchctl = tmp_path / "launchctl"
+    _write_executable(
+        launchctl,
+        f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\n",
+    )
+    monkeypatch.setenv("VIBECRAFTED_LAUNCHCTL", str(launchctl))
+    result = installer._runtime_launchctl("print", "gui/501/example")
+    assert result.returncode == 0
+    assert log.read_text(encoding="utf-8") == "print gui/501/example\n"

@@ -171,36 +171,9 @@ granicą) · `obsolete_residue` (martwy konkurent; kandydat do późniejszego
 cuta) · `UNRESOLVED` (dowody Loctree niewystarczające — zapisane, nigdy
 po cichu porzucone). Nie wymyślaj właściciela, żeby domknąć graf.
 
-## Schemat dowodowy (per finding)
+## Schemat dowodowy, werdykt i kontrakt journala
 
-Oś · konkurenci (`file:line`, LOC) · walczące symbole · werdykt pary ·
-znak legendy · klasyfikacja · dowód (wyjścia loct cytowane per organ) ·
-pokwitowanie falsyfikacji nieobecności (linia literal coverage). Finding
-bez któregokolwiek elementu jest kandydatem, nie findingiem.
-
-## Werdykt przebiegu i uczciwe wyjście
-
-Każdy przebieg zwraca dokładnie jeden werdykt:
-
-| Werdykt                      | Warunek                                                                                                                                                            |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `AXES_CLOSED_CANDIDATE`      | zero wierszy `UNRESOLVED`; każda zachowana krawędź wykonywalna sprowadza się do jednej władzy; zero bypassów; kompletne, nieucięte dowody pod jednym fingerprintem |
-| `AXES_OPEN`                  | cokolwiek mniej — powiedz to wprost                                                                                                                                |
-| `INSTRUMENT_INCOMPLETE`      | Loctree nie pokrył wymaganych pytań (fail-log dopisany)                                                                                                            |
-| `LAUNCHER_CONTRACT_CONFLICT` | odziedziczone instrukcje żądały mutacji lub commitów — stop, zostań przy N=1, raportuj                                                                             |
-
-Brakujące historyczne punkty kontrolne pozostają `MISSING` — nigdy nie są
-rekonstruowane ani interpolowane. Raport kończy się linią uczciwego stanu
-`BUILD/LINT/TEST/RUNTIME=NOT_ASSESSED`: canary jest radarem bez mutacji,
-a zielone bramki leżą poza jego jurysdykcją.
-
-## Kontrakt journala
-
-Append-only `./.loctree/canary/JOURNAL.md` w docelowym repo. Każdy
-przebieg dopisuje: SHA HEAD, pokwitowania Phase 0, zbadane osie, findingi
-z dowodami, wyniki prism. Przebiegi nigdy nie nadpisują historii —
-journal pokazuje, co radar widział _na tym SHA_, nawet gdy późniejszy
-przebieg wie lepiej.
+Każdy finding wymaga pełnego schematu dowodowego (oś, konkurenci, werdykt pary, legenda, klasyfikacja, dowód loct, pokwitowanie nieobecności), przebieg kończy się jednym werdyktem (`AXES_CLOSED_CANDIDATE`, `AXES_OPEN`, `INSTRUMENT_INCOMPLETE`, `LAUNCHER_CONTRACT_CONFLICT`) z linią `BUILD/LINT/TEST/RUNTIME=NOT_ASSESSED`, a historia dopisuje się do `./.loctree/canary/JOURNAL.md`. Pełne schematy i warunki werdyktów: [references/evidence-and-journal.md](references/evidence-and-journal.md).
 
 ## Report → discuss → decide (stop QC)
 
@@ -213,78 +186,11 @@ ręcznych findingów **bez podpowiadania, gdzie patrzeć**.
 
 ## Tryb floty (duże repozytoria)
 
-Jeden agent na oś (albo na scope karmiący osie), zmienne N z Phase I —
-nigdy stała liczba. **Skalo-adaptacyjnie:** gdy jeden plan przytłacza
-resztę, potnij go wzdłuż jego własnej podstruktury na uczciwe dla agenta
-budżety, a to, co zostaje poza falą, zadeklaruj jako jawnie odroczoną falę
-— odroczenie to zapisana decyzja, nie przemilczenie.
+Skaluj N dynamicznie z osi Phase I (N=1 Living Tree; N>1 Fleet Worktrees Mode B z worktree tworzonym przez workera, osobnym scratchpadem per scope, przypiętym fingerprintem snapshotu oraz hybrydą N≤8 natywnie / N>8 zewnętrznie). Szczegółowe reguły podłoża i dispatchu: [references/fleet-mode.md](references/fleet-mode.md).
 
-Substrat to mechanika, nie osąd: N=1 → Living Tree; N>1 → Fleet Worktrees
-jako **formacja Mode B** Living Tree Rule — briefy per-scope są spisanym
-planem dispatchu, bramki per-scope wcześniej zadeklarowanymi verifierami,
-domeny scope'ów rozłączne, a sesja canary jednowątkowym integratorem.
-**Worker sam tworzy swój worktree** od bazy integracji (launcher niczego
-nie provisionuje) — przypięte SHA jako zamrożony widok, nie poczekalnia
-zmian: radar jest wolny od mutacji, więc nie ma commitów scope'ów do
-mergowania; integrator kopiuje pliki dowodowe per-oś
-(`.loctree/canary/axes/*.json`, gitignored) z każdego worktree przed
-sprzątaniem, a zwrócony JSON workera jest zabezpieczeniem. Nigdy nie
-parkuj równoległej floty w jednym wspólnym
-checkoucie (stałe polecenie operatora, 2026-08-20). Każdy scope dostaje
-własny podkatalog scratchpadu, nazwany w briefie — płaskie wspólne nazwy
-w tmp kolidują między równoległymi scope'ami.
+## Skrypty, zależności i częste błędy
 
-Nie cytuj liczb bez przypiętego fingerprinta snapshotu: edycje floty
-przesuwają linie i wyzwalają skany przyrostowe, więc liczby `loct follow`
-dryfują w locie. Natywne subagenty dziedziczą **model rodzica** (agent
-model parity); piny dotyczą tylko workerów zewnętrznych. Hybryda: N≤8
-natywnie; N>8 zewnętrznie przez
-[await-arming](../../vc-dispatch/references/await-arming.md). Szablon
-briefu per-scope:
-[references/canary-agent-brief.md](../../vc-canary/references/canary-agent-brief.md).
-Pin agenta: user; inaczej ten launcher, który żyje w sesji, w kolejności
-`claude` · `codex` · `grok` · `cursor`.
-
-## Skrypty pomocnicze
-
-```bash
-CLI="uv run --python 3.12 …/vc-canary/scripts/canary_cli.py"
-
-$CLI snapshot-path --root .
-$CLI repo-view --root .
-$CLI atlas --root . --refresh
-$CLI coverage --root .
-```
-
-Wszystkie zapisy idą pod `./.loctree/` (atlas + canary). Status na stdout;
-dane w plikach.
-
-## Zależności
-
-| Skill / narzędzie           | Po co                                |
-| --------------------------- | ------------------------------------ |
-| `loct` / loctree            | snapshot, organy, prism, occurrences |
-| `vc-loctree`                | doktryna strukturalna                |
-| `vc-dispatch` await-arming  | budzenie floty, nie pliki logów      |
-| `vc-delegate` / `vc-agents` | hybryda natywni vs zewnętrzni        |
-
-## Częste błędy
-
-- Traktowanie każdej wielowładzy jako defektu (`INTENTIONAL_VARIANT`
-  z udowodnioną granicą to zdrowa odpowiedź)
-- Proponowanie refaktorów albo tronów wewnątrz przebiegu canary
-- Twierdzenie o nieobecności z wyszukiwania semantycznego bez literal
-  coverage
-- Raport na nieświeżym snapshocie albo ignorowanie stanu dirty/worktree
-- Nadpisywanie journala zamiast dopisywania
-- Używanie `loct-context-full.json` jako inwentarza plików
-- Stała liczba agentów zamiast osi z Phase I
-- Liczenie definicji zamiast referencji (cenzus definicji ukrył kiedyś
-  141 miejsc wywołań)
-- Rekonstruowanie albo interpolowanie brakujących historycznych punktów
-  kontrolnych zamiast zapisania `MISSING`
-- Dispatch wycofanego briefu docstring-WRITE katalogera — canary nie
-  mutuje kodu (kontrakt wycofany 2026-08-24)
+Używaj `canary_cli.py` (`snapshot-path`, `repo-view`, `atlas --refresh`, `coverage`) wraz z Loctree, `vc-loctree`, `vc-dispatch` i `vc-delegate`/`vc-agents`. Nie proponuj refaktorów, nie zakładaj nieobecności bez literal coverage i nigdy nie nadpisuj journala. Komendy, tabela zależności i pełna lista błędów: [references/scripts-and-mistakes.md](references/scripts-and-mistakes.md).
 
 ## Weryfikacja przed handoffem
 

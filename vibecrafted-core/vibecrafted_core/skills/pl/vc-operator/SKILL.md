@@ -62,50 +62,9 @@ dogfooding: "required for repo-impacting work"
 > Autonomiczna postawa orkiestracji. Dyscyplina fal. Odzyskiwanie ponad ponawianie.
 > Prowadź do celu, dziennikuj zwroty akcji, zatrzymuj się przy niedozwolonych przyciskach.
 
-## Taksonomia
+## Taksonomia i Obowiązkowy punkt wejścia
 
-```yaml
-vc-operator:
-  kind: orchestration_posture
-  scope: interactive_session
-  meaning: dispatch, await, synthesize, recover, close waves
-  autonomy: orchestration
-```
-
-`vc-operator` to nie skill implementacyjny. To postawa dyrygenta dla zaplanowanego
-łańcucha pracy.
-
-- `vc-partner` zachowuje i współsteruje pierwotnym kształtem przed pracą strategiczną
-  lub w jej trakcie.
-- `vc-ownership` prowadzi jeden slice produktowy end-to-end.
-- `vc-operator` prowadzi flotę przez plan i zatrzymuje się przy operator button.
-- `vc-init` otwiera sesję prawdą repo/runtime'u/intencji; nie jest postawą.
-
-Wywołanie skilla to nie wywołanie runtime'u. Jeśli operator powie `$vc-operator`
-wewnątrz bieżącej rozmowy, bieżący agent przyjmuje tę postawę orkiestracji. Osobny
-przebieg runtime'u istnieje tylko wtedy, gdy operator lub framework uruchomi
-`vibecrafted operator <agent> ...`.
-
-Zobacz [CONTRACT.md](CONTRACT.md) po wiążący podział postawa/runtime.
-
-## Obowiązkowy punkt wejścia
-
-Najpierw przeczytaj [RUNNER.md](RUNNER.md).
-
-`SKILL.md` definiuje postawę. `RUNNER.md` to deterministyczny runbook. Pozostałe
-dokumenty to powierzchnie wspierające:
-
-- [FLOW.md](FLOW.md) - pętla orkiestracji i artefakty.
-- [TAXONOMY.md](TAXONOMY.md) - taksonomia postawy operatora vs runtime'u.
-- [FRAME.md](FRAME.md) - granice ról Worker / Owner / Operator.
-- [GUIDE.md](GUIDE.md) - struktura wave atlas.
-- [DISPATCH.md](DISPATCH.md) oraz [DISPATCH_TEMPLATE.md](DISPATCH_TEMPLATE.md) -
-  kontrakt briefu workera.
-- [AWAIT.md](AWAIT.md) - dyscyplina await/odzyskiwania.
-- [AUTONOMY.md](AUTONOMY.md) - granice autonomii i operator button.
-- [JOURNAL.md](JOURNAL.md) - dziennik operatora tylko do dopisywania.
-- [RUNTIME.md](RUNTIME.md) - kontrakt uruchamiania runtime'u i artefaktów.
-- [WHY_MATRIX_TABLE.md](WHY_MATRIX_TABLE.md) - routing agentów.
+`vc-operator` to interaktywna postawa orkiestracji (`$vc-operator`), odrębna od `vc-partner` (strategia), `vc-ownership` (pojedynczy slice), `vc-init` (orientacja) oraz przebiegów runtime'u (`vibecrafted operator <agent> ...`; zobacz [CONTRACT.md](CONTRACT.md)). Najpierw przeczytaj [RUNNER.md](RUNNER.md); powierzchnie wspierające ([FLOW.md](FLOW.md), [TAXONOMY.md](TAXONOMY.md), [FRAME.md](FRAME.md), [GUIDE.md](GUIDE.md), [DISPATCH.md](DISPATCH.md), [DISPATCH_TEMPLATE.md](DISPATCH_TEMPLATE.md), [AWAIT.md](AWAIT.md), [AUTONOMY.md](AUTONOMY.md), [JOURNAL.md](JOURNAL.md), [RUNTIME.md](RUNTIME.md), [WHY_MATRIX_TABLE.md](WHY_MATRIX_TABLE.md)) są opisane w [references/taxonomy-and-adjacent.md](references/taxonomy-and-adjacent.md).
 
 ## Checkpoint orientacji
 
@@ -166,23 +125,7 @@ Operator prowadzi odkryte poprawki; nie implementuje ich osobiście.
 
 ## Brief-Gate — nigdy nie dispatchuj wydmuszki (scaffold-doctor)
 
-Przed odpaleniem JAKIEJKOLWIEK fali plan MUSI przejść bramkę **scaffold-doctor**: każde
-cięcie w wave atlas ma wyrenderowany `briefs/<wave>-<slot>_<slug>.md` ze wszystkimi 12
-sekcjami, atomową akceptacją popartą weryfikatorem oraz dokumentem projektowym dla
-każdego cięcia `needs_design`.
-
-- Chudy `master-dispatch.md` bez briefów per cięcie to **wydmuszka** — odmów jego
-  dispatchu.
-- Jeśli któremuś cięciu brakuje briefu, NIE improwizuj go w chwili odpalenia i NIE
-  odpalaj bez niego. Wróć do `vc-scaffold` (Faza 5), aby wyrenderować brakujące briefy,
-  a potem ponownie przejdź bramkę.
-- Bramka jest **sprawdzana maszynowo, nie obiecywana przez agenta**
-  (`vibecrafted-server/control-core`) — to ta sama bramka artefakt-jako-prawda, której
-  używa każdy handoff kadencji read-write (scaffold→implement, marbles→audit…).
-
-To operatorska połowa reguły brief-na-cięcie: scaffold renderuje briefy, operator
-odmawia prowadzenia bez nich. Razem czynią „flow nie dowozi" strukturalnie niemożliwym —
-a nie dyscypliną, którą agent musi pamiętać.
+Każde cięcie w wave atlas MUSI mieć wyrenderowany 12-sekcyjny brief (`briefs/<wave>-<slot>_<slug>.md`) i dokument projektowy dla każdego cięcia `needs_design`; chudy `master-dispatch.md` to wydmuszka i wraca do `vc-scaffold` przed odpaleniem. Bramka sprawdzana maszynowo w `vibecrafted-server/control-core`: [references/operating-protocol.md](references/operating-protocol.md).
 
 ## Punkt stopu
 
@@ -196,57 +139,11 @@ oraz może wykonać działania jawnie dozwolone przez plan/sesję. Jeśli zezwol
 nieobecne lub niejednoznaczne, zatrzymaj się i napisz handoff zamiast improwizować
 autorytet.
 
-## Pętla operacyjna
+## Pętla operacyjna i Prawo dispatchu
 
-1. Uruchom lub skonsumuj świeże evidence `vc-init`.
-2. Przeczytaj plan i wszystkie cytowane pliki w całości.
-3. Przekształć przez `vc-scaffold`, jeśli plan nie jest dispatchowalny.
-4. Zbuduj wave atlas.
-5. Zweryfikuj każde cięcie względem Loctree.
-6. Wybierz agentów przez `WHY_MATRIX_TABLE.md`.
-7. Wyrenderuj briefy workerów z `DISPATCH_TEMPLATE.md`.
-8. Przeskanuj każdy brief pod kątem niebezpiecznych komend i triggerów hard-stop.
-9. Odpalaj po jednej fali naraz przez `vibecrafted <skill> <agent>`.
-10. Czekaj na trwałe artefakty.
-11. Zweryfikuj raporty, bramki, gałąź i SHA.
-12. Przeskanuj wylądowane commity pod kątem sekretów, danych osobowych, ścieżek
-    lokalnych, lokalnej topologii sieci, adresów IP i dokumentów wewnętrznych.
-13. Przy zacięciach użyj dispatchu odzyskiwania; nigdy nie restartuj na ślepo.
-14. Zaktualizuj tracker i dopisz materialne decyzje do kanonicznego dziennika.
-15. Zsyntetyzuj zamknięcie fali.
-16. Kontynuuj lub zatrzymaj się przy niedozwolonym operator button.
+Realizuj 16-krokową pętlę falową (skonsumuj `vc-init` -> zbuduj wave atlas -> weryfikuj przez Loctree -> dobierz agentów przez `WHY_MATRIX_TABLE.md` -> wyrenderuj briefy -> skanuj hard-stopy -> odpalaj po jednej fali przez `vibecrafted <skill> <agent> --file <brief>` -> czekaj na trwałe artefakty -> zweryfikuj bramki/gałąź/SHA/sekrety -> odzyskuj przy zacięciach -> dziennik -> zamknięcie fali -> stop przy niedozwolonym operator button). Każdy zwykły dispatch floty domyślnie idzie jako `headless` (`runtime="visible"` / `--runtime terminal` tylko dla ścieżek wymagających TTY); nigdy nie zastępuj telemetrii workerów natywnymi subagentami.
 
-## Prawo dispatchu
-
-Każdy dispatch zewnętrznego workera idzie przez launcher frameworka:
-
-```bash
-vibecrafted <skill> <agent> --file <brief>
-```
-
-Żadnych natywnych subagentów do dispatchu floty w trybie operatora. Natywna delegacja
-jest dozwolona dla równoległego zwiadu lub małego bounded researchu wewnątrz sesji
-operatora, ale zdispatchowane slice'y workerów potrzebują telemetrii, kart uruchomienia,
-raportów, transkryptów, meta i awaitowalnego stanu.
-
-### Granica workera headless
-
-Sesja operatora vc-frame to **User Session**, nie host procesu workera. Każdy zwykły
-dispatch floty domyślnie idzie jako `headless` — również praca prowadzona przy
-operatorze, odpalona przy ustawionym `VC_FRAME_SESSION_NAME`. To worker jest
-właścicielem trwałego stanu runu i transkryptu; vc-frame może te powierzchnie
-projektować, a zamknięcie projekcji nie może zatrzymać runu.
-
-- **CLI i MCP są zgodne.** `vibecrafted <skill> <agent> --file <brief>` oraz
-  `vc_run_launch` / `vc_launch` domyślnie odpalają odłączonego workera headless.
-- **Obserwacja jest jawna i trwała.** Używaj `observe`, `await`, transkryptów, stanu
-  runu i settlementu Guardiana zamiast traktować panel jako dowód, że coś żyje.
-- **Terminal jest wyjątkiem.** `runtime="visible"` albo `--runtime terminal` podawaj
-  tylko dla ścieżki providera, o której wiadomo, że wymaga TTY. Dopóki nie ma brokera
-  PTY prowadzonego przez daemona, ta ścieżka kompatybilności zostaje przywiązana do
-  terminala i nie dziedziczy gwarancji przeżycia runu headless.
-- **Interaktywne PTY zostaje po stronie człowieka.** `init`, `operator` i samo
-  interaktywne `resume` pozostają prawdziwymi zakładkami User Session.
+Pełna pętla i granica workera headless: [references/operating-protocol.md](references/operating-protocol.md).
 
 ## Dopuszczalność mutacji planu
 
@@ -283,46 +180,13 @@ Zobacz [JOURNAL.md](JOURNAL.md).
 
 ## Skille pokrewne
 
-- `vc-init` - wymagany checkpoint orientacji.
-- `vc-scaffold` - autorstwo lub przekształcanie planu przed dispatchem.
-- `vc-ownership` - każdy worker może działać z ownership wewnątrz swojego slice'a;
-  operator jest właścicielem łańcucha.
-- `vc-partner` - wspólna strategia, zanim plan stanie się dispatchowalny.
-- `vc-marbles` - zbieżność, gdy slice zawodzi na dryfie prawdy.
-- `vc-audit` / `vc-review` / `vc-followup` - powierzchnie weryfikacji po falach.
-- `vc-release` - dowiezienie na zewnątrz, gdy akcje release'u są dozwolone przez
-  plan/sesję lub gdy operator button został naciśnięty.
+Orkiestracja styka się z `vc-init` (orientacja), `vc-scaffold` (kształtowanie planu), `vc-ownership` (wykonanie slice'a), `vc-partner` (strategia przed dispatchem), `vc-marbles` (zbieżność przy dryfie prawdy), `vc-audit` / `vc-review` / `vc-followup` (weryfikacja po falach) i `vc-release` (dowiezienie na zewnątrz). Szczegóły ról: [references/taxonomy-and-adjacent.md#skille-pokrewne](references/taxonomy-and-adjacent.md#skille-pokrewne).
 
-## Antywzorce
+## Antywzorce i Kształt wyjścia
 
-- Zachowywanie się jak solowy implementer po tym, jak operator poprosił o orkiestrację.
-- Dispatchowanie, zanim plan będzie czytelny jako wave atlas.
-- Ponowne odpalanie zaciętej fali zamiast czytania artefaktów i wydania odzyskiwania.
-- Spawnowanie natywnych subagentów jako zamienników dla dispatchu workerów popartego
-  telemetrią.
-- Ciche obniżanie tieru modelu lub naruszanie sprawiedliwości agentów.
-- Ogłaszanie fali jako zielonej bez evidence raportu, bramki, gałęzi i SHA.
-- Autorstwo commitów lub zamknięć workera, jakby operator wykonał ich pracę.
-- Czynienie zakładki lub sesji vc-frame właścicielem procesu zwykłego workera.
-- Push, merge, deploy lub publikacja bez spisanego zezwolenia plan/sesja lub jawnego
-  naciśnięcia operator button.
+Nie działaj jak solowy implementer, nie dispatchuj bez wave atlasu, nie restartuj na ślepo zaciętej fali, nie zastępuj telemetrii workerów natywnymi subagentami, nie obniżaj po cichu tieru modelu, nie ogłaszaj zielonej fali bez evidence raportu/bramki/gałęzi/SHA i nie pushuj/merguj/deployuj bez zgody w planie/sesji lub naciśnięcia operator button. Aktualizacje postępu podają stan, evidence, decyzję i jeden następny ruch; finalny handoff podaje pokrycie, SHA, bramki/ryzyka, odzyskiwania i pozostały przycisk.
 
-## Kształt wyjścia
-
-Dla postępu:
-
-1. Bieżący stan - fala, prompt, agent, run ID, gałąź/SHA jeśli wylądowała.
-2. Evidence - status raportu/bramki/artefaktu.
-3. Decyzja - kontynuuj, odzyskuj, pauzuj lub stop.
-4. Następny ruch - dokładnie jeden.
-
-Dla finalnego handoffu:
-
-1. Pokrycie planu i fal.
-2. Wyjścia workerów i SHA.
-3. Bramki i nierozwiązane ryzyka.
-4. Podjęte działania odzyskiwania.
-5. Handoff w punkcie stopu: jaki przycisk pozostaje dla operatora.
+Pełna lista i szablony: [references/operating-protocol.md#antywzorce](references/operating-protocol.md#antywzorce).
 
 ## Weryfikacja w stopce dispatchu
 
