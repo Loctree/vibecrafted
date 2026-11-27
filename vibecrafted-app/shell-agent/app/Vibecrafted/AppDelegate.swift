@@ -1666,21 +1666,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
       throw PreferenceConflictError(envelope: envelope)
     }
     guard clean, terminationStatus == 0 else {
-      // A refusal ends with one human sentence on stderr, and that sentence is
-      // shown exactly as the installer wrote it — it is the admission owner's
-      // verdict, not material for this App to rephrase. Only a run that never
-      // reached a verdict (killed, timed out, or silent) is described here,
-      // with interpreter frames reduced to the owner's actual message.
-      let diagnostic = boundedResolverDiagnostic(
-        stdout: stdout, stderr: stderr, limit: 480)
-      let detail: String
-      if timedOut {
-        detail = "the Runtime Pack installer timed out; its durable transaction will recover or report its lease state\(diagnostic)"
-      } else if clean, let refusal = installerRefusalLine(stderr: stderr) {
-        detail = refusal
-      } else {
-        detail = "the Runtime Pack installer exited \(terminationStatus)\(diagnostic)"
-      }
+      let detail = runtimePackInstallerFailureDetail(
+        stdout: stdout, stderr: stderr, terminationStatus: terminationStatus,
+        clean: clean, timedOut: timedOut)
       throw NSError(
         domain: "io.vetcoders.vibecrafted.install",
         code: Int(terminationStatus),
