@@ -248,7 +248,7 @@ this for other runtimes until their harness is verified.
   (`NOTARY_PROFILE`, e.g. `vibecrafted-notary`); raw Apple-ID credentials are
   rejected without a TTY.
 - **Own only your namespace.** Launchers only for `vc-*`, `vibecrafted*`,
-  `vibecraft` and `telemetry`. Loct, aicx, prview and screenscribe come from their
+  `vibecraft`, `telemetry` and `x9eval`. Loct, aicx, prview and screenscribe come from their
   own channels (`scripts/install-foundations.sh`), never vendored or wrapped.
   Never overwrite another product's command; reclaim only by receipt path and
   digest, restore collision backups, leave no dependents dangling.
