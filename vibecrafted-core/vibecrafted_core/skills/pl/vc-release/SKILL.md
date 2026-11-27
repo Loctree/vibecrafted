@@ -107,64 +107,17 @@ Kontrakt: [`../../vc-dou/references/public-surface-floor.md`](../../vc-dou/refer
 
 Jeśli brakuje którejkolwiek płaszczyzny, wskaż to jawnie i zablokuj release, chyba że użytkownik świadomie akceptuje ryzyko.
 
-## Kanon artefaktu
+## Kanon artefaktu, topologia deploya i domyślne reguły proxy
 
-**Git/wersjonowanie:** otaguj dokładny commit (`git tag -a v1.2.3 -m "Release 1.2.3"`), push (`git push origin v1.2.3`), obowiązkowy changelog, opublikowana wersja zgadza się z referencjami w repo/badge'ach/docs/stronie.
+Otaguj dokładny commit, utrzymuj zgodność changeloga i artefaktów rejestru z opisowymi nazwami plików oraz wybierz najmniejszy uczciwy stack (Caddy, Nginx lub Docker). Domyślnie binduj usługi do `127.0.0.1`, terminuj TLS na celowym reverse proxy zachowującym nagłówki `Host`/forwardujące/websocket, wstrzykuj sekrety w runtimie i wymagaj `/health` oraz kontenerów non-root.
 
-**Opublikowane wyjścia:** npm (`npm publish` po bumpie wersji), crates.io (`cargo publish`), PyPI (wheel + sdist), GitHub Release (dołącz dokładne artefakty z nudnymi, opisowymi nazwami plików), Docker (otaguj dokładną wersję, opcjonalnie `latest` — nigdy nie dowoź samego `latest` jako tożsamości).
-
-**Nazewnictwo artefaktów:** `myapp-v1.2.3-linux-x86_64.tar.gz` (dobrze) vs `release.zip` (źle).
-
-## Topologia deploya
-
-Wybierz jedną świadomie:
-
-- **Caddy** — solo/mały zespół, kilka prostych upstreamów, automatyczny HTTPS. Domyślne dla webowych MVP, proxy landing+app.
-- **Nginx** — już go obsługujesz pewnie, zaawansowane potrzeby reverse-proxy, wiele upstreamów. Dla ustalonych stacków ops, większych posiadłości web/API.
-- **Docker** — odtwarzalność, heterogeniczne środowiska, przenośny preview/staging/prod.
-
-**Bezpieczna drabina:** najprostszy realny launch → static hosting lub Caddy. App + worker + db → Docker + reverse proxy. Dojrzała infra → Nginx lub standard platformy. Wybierz najmniejszy uczciwy stack, nie to, co brzmi imponująco.
-
-## Domyślne ustawienia bezpieczeństwa deploya
-
-- Domyślnie binduj usługi aplikacji do `127.0.0.1`; udokumentuj każdy wyjątek `0.0.0.0`
-- Terminuj TLS na celowym proxy/ingressie; preferuj reverse proxy nad surowym wystawieniem portu
-- Wewnętrzna sieć Dockera zamiast portów publikowanych na hoście dla usług prywatnych
-- Wstrzykiwanie env w runtimie, nigdy sekrety wpieczone w obrazy
-- Wymagaj endpointu `/health`, graceful shutdown, kontenerów non-root, `.dockerignore` bez sekretów
-
-**Czerwone flagi:** panel admin/debug zbindowany publicznie; publiczna usługa na `:3000`/`:5173`/`:8000` bez proxy/TLS; `CORS *` na uwierzytelnionych API; wyeksponowane stacktrace'y lub bannery frameworka; pliki `.env` lub backupy dostępne z weba.
-
-## Reverse proxy i ekspozycja
-
-Minimalne oczekiwania wobec reverse-proxy:
-
-- nagłówki `Host` i forwardujące zachowane celowo
-- wsparcie websocket upgrade, jeśli aplikacja tego potrzebuje
-- rozsądne ustawienia timeoutu i rozmiaru body
-- redirect `www`/apex zgodnie z decyzją kanoniczną
-- redirect 80 -> 443, gdy zamierzony jest publiczny HTTPS
-
-Ekspozycja na publiczny Internet to decyzja, nie domyślny tryb.
+Pełny kanon, bezpieczna drabina, domyślne ustawienia bezpieczeństwa, czerwone flagi i zasady reverse proxy: [references/deployment-and-proxy.md](references/deployment-and-proxy.md).
 
 ## Bramka release'u Semgrepa
 
-Semgrep jest częścią kanonu. Nieopcjonalny. Raport release'u musi nieść evidence.
+Semgrep jest częścią kanonu (nieopcjonalny): przed release'em uruchom `make semgrep` na pełnym repo, klasyfikuj findingi wg **granicy przepływu danych** i zablokuj release przy każdym nierozwiązanym blokującym findingu, chyba że użytkownik zaakceptuje ryzyko na piśmie w raporcie. Gdy Semgrep jest niedostępny, uruchom `uvx semgrep` i zapisz niespełnienie bramki.
 
-Komenda kanoniczna: `make semgrep` (podpięta tak samo jak lokalne hooki pre-commit/pre-push: `semgrep scan --config auto --error --quiet --exclude-rule html.security.audit.missing-integrity.missing-integrity .`). Hooki mieszkają w `scripts/hooks/`, aktywowane przez `make init-hooks`.
-
-Przed release'em: uruchom `make semgrep` na pełnym repo, zapisz findingi (rule id, severity, plik, zakres linii), klasyfikuj wg **granicy przepływu danych (dataflow boundary)** (nie wg lokalizacji pliku):
-
-- tainted-path / sinki LFI → napraw przy zwalidowanym obiekcie root
-- regexy podatne na ReDoS → ograniczone parsowanie lub bezpieczny kształt
-- niebezpieczne merge'owanie headerów/obiektów → jawna allowlista + niemutowalna granica wejścia
-- konstrukcja command/shell → sparametryzowane wywołanie, nigdy konkatenacja stringów przez niezaufany szew (untrusted seam)
-
-Zablokuj release przy każdym nierozwiązanym blokującym findingu, chyba że użytkownik jawnie akceptuje ryzyko na piśmie wewnątrz raportu.
-
-Minimalne klasy: obejścia auth/authz, niebezpieczna obsługa sekretów, shell/command injection, SSRF, path traversal/LFI, niebezpieczne serwowanie plików, słaba walidacja wejścia na groźnych sinkach, niebezpieczna deserializacja/eval-podobne, regexy ReDoS, niebezpieczne merge'owanie headerów/obiektów, pozostawione włączone endpointy debug/dev frameworka.
-
-Jeśli Semgrep niedostępny, powiedz to jawnie, uruchom `uvx semgrep` (udokumentowany fallback) i zapisz w raporcie, że bramka nie została spełniona. Cisza jest nieakceptowalna.
+Pełne reguły naprawcze granic przepływu danych i minimalne klasy findingów: [references/semgrep-gate.md](references/semgrep-gate.md).
 
 ## Kontrakt raportu release'u
 
@@ -176,77 +129,15 @@ Każdy raport release'u musi zawierać te obowiązkowe sekcje i linkować z powr
 - **Decyzja o trybie deploya** — wybrana topologia, postawa proxy/TLS oraz ścieżka rollbacku.
 - **Smoke instalacji po release'ie** — weryfikacja instalacji/uruchomienia zimną ścieżką z opublikowanego artefaktu.
 
-## Domena, DNS, weryfikacja
+## Domena, widoczność, onboarding i smoke po release'ie
 
-Jeśli produkt ma jakąkolwiek publiczną powierzchnię, zweryfikuj: domena zarejestrowana i zamierzona, DNS na właściwy target, kanoniczny host (
-`www` vs apex), redirecty zgadzają się z kanonem, TLS rozwiązuje się czysto, domeny staging vs prod nie pomieszane. Także: żadnych nieaktualnych domen preview reklamowanych jako główne, żadnego niepasującego favicona/title/og:image wyciekającego starą tożsamość, żadnych zepsutych ścieżek
-`/.well-known/*`.
+Publiczne powierzchnie muszą zweryfikować DNS, redirecty kanonicznego hosta, TLS, dowody własności `.well-known/*` / TXT, indeksowalne HTML/SSR SEO, `robots.txt`/`sitemap.xml`, onboarding pierwszego użytkownika na zimno oraz smoke test z opublikowanego artefaktu (nigdy z lokalnego checkoutu). Release wymaga też realiów finansowo-prawnych i unikania antywzorców.
 
-Dowody własności (gdy publiczne produkty ich potrzebują): Search Console, Bing Webmaster, pliki TXT/challenge domeny, endpointy `.well-known/` ekosystemu Apple/Google, wszelkie proofy challenge-response wymagane przez infrę/platformy. Jeśli dowód własności domeny jest wymagany, a ścieżka challenge jest nieobecna, release nie jest skończony.
-
-## Kanon SEO i widoczności
-
-Widoczność to twardy checklist, nie nice-to-have.
-
-- **Poziom strony**: opisowy `<title>`, meta description, jeden prawdziwy `<h1>`, crawlable content w początkowym HTML lub
-  prawdziwy fallback, kanoniczny URL, tagi Open Graph + Twitter card, poprawny status code, `noindex` tylko gdy
-  zamierzony.
-- **Poziom strony (site)**: `robots.txt`, `sitemap.xml`, strategia kanonicznego hosta, spójne linkowanie wewnętrzne, żadnych zepsutych
-  linków docs/marketing, favicon + assety social preview.
-- **Sprawdzenia indeksowalności**: `curl` strony i weryfikacja sensownej treści bez JS; route nieblokowany przez `robots.txt`; meta
-  robots nie `noindex`, chyba że zamierzone; canonical wskazuje na zamierzony publiczny URL.
-- **Sprawdzenia widoczności domeny**: docs/landing/CTA wszystkie się rozwiązują; instrukcje instalacji wskazują na realne publiczne artefakty; podgląd social share nie jest zepsuty.
-
-Jeśli obcy nie potrafi szybko odkryć, zrozumieć i wypróbować produktu, release jest niekompletny.
-
-## Prawda onboardingu
-
-Zweryfikuj ścieżkę pierwszego użytkownika: instalacja z opublikowanych artefaktów (nie z repo), przejście publicznego quickstartu na zimno, screenshoty i dema zgodne z rzeczywistością, app lub CLI startuje bez założeń dev-only, błędy są czytelne dla człowieka.
-
-## Smoke weryfikacja po release'ie
-
-Weryfikuj z **zimnej ścieżki**. Maszyna deweloperska nie jest świadkiem.
-
-Zainstaluj z **opublikowanego artefaktu** (npm/cargo/PyPI/GitHub Release/registry Dockera — nigdy lokalny checkout, nigdy
-side-loadowany tarball, nigdy gałąź dev). Następnie zweryfikuj: publiczny URL się rozwiązuje, TLS ważny + zgodny z kanonicznym hostem, endpoint health
-przechodzi, kluczowa akcja działa end to end, linki docs i CTA się rozwiązują, opublikowana wersja zgadza się z uruchomioną wersją,
-screenshoty/dema onboardingu zgodne z wyjściem instalatora na zimno.
-
-Raport musi nazwać dokładne źródło artefaktu (URL rejestru, tag, digest, URL pobierania). „Działało na moim repo" nie spełnia tej bramki.
-
-Każdy przebieg `vc-release` musi wyprodukować raport z faktycznym evidence. Nie można uczciwie powiedzieć „done" bez czterech obowiązkowych sekcji poniżej. Jeśli którejś brakuje, release jest **zablokowany**, dopóki nie zostanie wypełniona lub użytkownik nie zaakceptuje luki na piśmie.
+Pełne checklisty domeny/DNS, SEO i widoczności, prawdy onboardingu, smoke weryfikacji na zimno, szczegółowego rozkładu raportu, realiów finansowo-prawnych i antywzorców: [references/visibility-smoke-and-antipatterns.md](references/visibility-smoke-and-antipatterns.md).
 
 > Kanoniczny szablon: [`references/release-report-template.md`](references/release-report-template.md).
 > Pełny checklist operatora: [`references/release-checklist.md`](references/release-checklist.md).
 > Pogłębienie realiów deploya: [`references/deployment-reality.md`](references/deployment-reality.md).
-
-## Kontrakt raportu release'u
-
-**Obowiązkowe sekcje:**
-
-1. **Bramka bezpieczeństwa** — uruchomiona komenda (`make semgrep` lub odpowiednik), status wyjścia i liczba findingów, klasyfikacja per finding (rule id, severity, plik, zakres linii, granica przepływu danych), rozwiązanie per finding (naprawione w commicie X / zaakceptowane z powodem / odroczone z issue trackującym), jawne stwierdzenie, gdy bramka faktycznie nie została spełniona.
-2. **Inwentarz wyeksponowanej powierzchni** — nasłuchujące porty i adresy bind (domyślnie `127.0.0.1`, udokumentuj każdy `0.0.0.0`), reverse proxy z przodu (Caddy/Nginx/cloud LB/brak) i gdzie terminuje się TLS, granice uwierzytelniania per powierzchnia, nagłówki odpowiedzi dodawane/zdejmowane na brzegu (HSTS, CSP, frame options, allowlista CORS), ścieżka materializacji sekretów.
-3. **Decyzja o trybie deploya** — wybrana topologia z uzasadnieniem, dlaczego to najmniejsze uczciwe dopasowanie, historia rollbacku (jak cofnąć bez ręcznych bohaterstw).
-4. **Smoke instalacji po release'ie** — źródło artefaktu (URL rejestru, tag, digest, URL pobierania — nigdy `file://` z drzewa roboczego), sekwencja komend wykonana z czystego środowiska, evidence z pierwszego uruchomienia (exit code, banner wersji, health check), wszelki dryf między udokumentowanym quickstartem a zaobserwowanym zachowaniem.
-
-**Sign-off/zatwierdzenie** tylko gdy wszystkie cztery sekcje są wypełnione i każda ma dołączone obiektywne evidence. Zielona bramka Semgrepa bez inwentarza wyeksponowanej powierzchni to nie sign-off. Decyzja o topologii bez przebiegu smoke to nie sign-off. Prawda jest kumulatywna.
-
-## Realia finansowe / prawne
-
-Koszty hostingu i transferu zrozumiane, limity rejestru/CDN znane, LICENSE poprawny, SECURITY.md istnieje, polityka prywatności/regulamin istnieją, jeśli w grę wchodzą dane użytkownika. Nie marketinguj własnościowego jako open source. Nie zbieraj danych bez powiedzenia o tym.
-
-## Antywzorce
-
-- Publikowanie bez `vc-dou`
-- Pomijanie hydracji i zakładanie, że użytkownicy sami sobie poradzą
-- Brak Semgrepa lub równoważnej bramki bezpieczeństwa
-- Wystawianie usług na `0.0.0.0` bez celowego projektu proxy/TLS
-- Zepsuta logika kanonicznej domeny lub redirectów
-- Zapominanie o plikach wyzwań weryfikacyjnych / rekordach TXT
-- Dowiezienie pustej skorupy tylko z JS, której crawlery nie rozumieją
-- Tagowanie bez changeloga
-- Deployowanie bez sprawdzeń smoke po release'ie
-- Traktowanie release'u jako jednorazowej ceremonii zamiast powtarzalnej dyscypliny
 
 ## Zasada końcowa
 

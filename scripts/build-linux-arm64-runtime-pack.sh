@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Payload modes are product bytes, not the caller's umask (CI signs under
+# umask 077); package-runtime-pack.sh copies them into the carrier as is.
+umask 022
 
 die() { printf 'Linux Runtime Pack build failed: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
@@ -81,6 +84,14 @@ prepare_sources "$work/sources"
 selection="$work/sources/selection.json"
 terminal_revision="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["vc-terminal"]["revision"])' "$selection")"
 frame_revision="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["vc-frame"]["revision"])' "$selection")"
+# A release dispatch pins the donor revisions. An empty pin is the CI lane,
+# which builds whatever the product source selects.
+if [[ -n "${VIBECRAFTED_TERMINAL_REVISION:-}" && "$VIBECRAFTED_TERMINAL_REVISION" != "$terminal_revision" ]]; then
+  die "requested vc-terminal revision does not match materialized source"
+fi
+if [[ -n "${VIBECRAFTED_FRAME_REVISION:-}" && "$VIBECRAFTED_FRAME_REVISION" != "$frame_revision" ]]; then
+  die "requested vc-frame revision does not match materialized source"
+fi
 
 make -C "$work/sources/vc-terminal" release-bins
 install -m 0755 "$work/sources/vc-terminal/target/release/alacritty" "$payload/libexec/vc-terminal"

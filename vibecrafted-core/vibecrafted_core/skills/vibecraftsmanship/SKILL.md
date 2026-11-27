@@ -113,51 +113,7 @@ operational teeth = drift permitted.
 
 ## Operational default — autonomous self-pacing (Claude Code native)
 
-**HARD RULE (Power axis enforcement, second canonical surface):** When the
-agent enters autonomous behavior — operator absent, deferred decisions,
-recurring monitoring, multi-turn execution without manual re-prompts —
-the default mechanism is the Claude Code native **`/loop`** skill
-(equivalent: `ScheduleWakeup` with `<<autonomous-loop-dynamic>>` sentinel
-for dynamic-pacing mode). NOT silent waiting. NOT polling in tight Bash
-sleeps. NOT "I'll just answer next turn whenever the operator returns."
-
-**Reason:** `/loop` is the canonical Claude Code power feature for
-autonomous self-pacing — it bridges the gap between "operator drives every
-turn" and "agent fires and forgets". Without entering `/loop`, the agent
-falls back to single-turn passivity: operator must re-prompt to continue
-work, even when next steps are obvious. `/loop` makes the agent's
-autonomous tail observable and bounded (heartbeat interval, fallback
-schedule, explicit stop condition).
-
-**When to enter `/loop`:**
-
-- Operator declared "bez odbioru" / "decide autonomously" / "I'm leaving"
-- Awaiting external work (CI, dispatched fleet, long-running build)
-- Multi-wave dispatch where waves complete asynchronously
-- Substrate operation with known wait window (rebase, install, sync)
-- Recurring observation (PR babysitting, deploy monitoring)
-
-**When NOT to enter `/loop`:**
-
-- Single-turn answer with no follow-up
-- Operator actively engaged in conversation
-- Work explicitly scoped to "do this one thing and stop"
-
-**Composition with external dispatch:**
-
-- External dispatch (`vibecrafted <launcher> <agent>`) produces async work
-  that needs `await`. Enter `/loop` to keep heartbeat alive between
-  `task-notification` events from the harness.
-- `/loop` + `vibecrafted` = canonical autonomous-operator pattern. One
-  declares "I'm staying engaged"; the other declares "I'm using
-  observable external surface". Both together = vibecraftsmanship power
-  axis fully realized.
-
-**Detection signal (STOP and enter loop):** if you catch yourself ending
-a turn with "operator's next move" or "waiting for response" while there
-is already-authorized queued work that fits the current scope and stop
-conditions, that is missed `/loop` entry. Re-think: schedule a self-paced
-check, declare what you'll do on each tick, stop when the stop condition is met.
+**HARD RULE (Power axis enforcement):** When entering autonomous behavior (operator absent, deferred decisions, async `vibecrafted` await, or recurring monitoring), enter Claude Code native **`/loop`** (`ScheduleWakeup` with `<<autonomous-loop-dynamic>>`) with an explicit heartbeat and stop condition — never silent waiting or tight Bash sleeps. Full entry/exclusion criteria, external-dispatch composition, and detection signals live in [references/autonomous-self-pacing.md](references/autonomous-self-pacing.md).
 
 ## Dependencies
 
@@ -233,36 +189,11 @@ falsifications.
 
 ## Anti-Patterns
 
-- **Drift mid-flight** without naming it: operator notices agent on wrong
-  posture but doesn't correct → wasted dispatch cycles
-- **Estimating in conventional ED** without applying empirical compression
-  awareness → wrong scope decisions
-- **Ranking-when-equal-intensity-was-the-truth**: agent imposes
-  primary/secondary/tertiary on operator's parallel options
-- **Performing search**: dispatching 3 agents when 1 is the right answer,
-  or 1 when 3 perspectives would have caught the blind spot
-- **Skipping survival check**: declaring done without gate green +
-  commit landed + reality contact
-- **Invoking tactical charter without posture call**: jumping into
-  vc-operator when the work was 1-slice (vc-ownership) or shared-decision
-  (vc-partner)
-- **Briefs longer than commits land**: operator-agent writes verbose
-  ceremony but workers ship more LOC than briefs explain — flip the ratio
-- **Forgetting that techniques are orthogonal**: marbles/research/audit/
-  review/polarize/prune are tools available within ANY posture, not
-  posture choices themselves
+Avoid posture drift, conventional ED estimation without empirical compression awareness, ranking equal-intensity parallel options, performing redundant search, or claiming done without green gates and a landed commit. See the full anti-patterns checklist in [references/anti-patterns-and-output.md](references/anti-patterns-and-output.md).
 
 ## Output Style
 
-Default: state which axis is currently load-bearing for the next move.
-Examples:
-
-- "Taste call: operator picks. Options on table: A, B, C with trade-offs."
-- "Power call: search underexplored. Spawning triple-research."
-- "Reality call: commits landed but gates red — survival not yet."
-
-When all three are aligned, declare it: "Trinity aligned, dispatchable.
-Posture: operator. Tactical charter: vc-operator. Go."
+State which axis (`Taste`, `Power`, or `Reality`) is load-bearing for the next move, or declare `"Trinity aligned, dispatchable"` when all three align. See example callouts in [references/anti-patterns-and-output.md](references/anti-patterns-and-output.md).
 
 ## Closing rail
 

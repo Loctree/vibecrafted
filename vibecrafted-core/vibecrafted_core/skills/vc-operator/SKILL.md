@@ -62,52 +62,9 @@ dogfooding: "required for repo-impacting work"
 > Autonomous orchestration posture. Wave discipline. Recovery over retries.
 > Lead to the goal, journal the turns, stop at unpermitted buttons.
 
-## Taxonomy
+## Taxonomy & Mandatory Entrypoint
 
-```yaml
-vc-operator:
-  kind: orchestration_posture
-  scope: interactive_session
-  meaning: dispatch, await, synthesize, recover, close waves
-  autonomy: orchestration
-```
-
-`vc-operator` is not an implementation skill. It is the conductor posture for
-a planned chain of work.
-
-- `vc-partner` preserves and co-steers the original shape before or during
-  strategy work.
-- `vc-ownership` drives one product slice end-to-end.
-- `vc-operator` conducts a fleet through a plan and stops at the operator
-  button.
-- `vc-init` opens the session with repo/runtime/intention truth; it is not a
-  posture.
-
-Skill invocation is not runtime invocation. If the operator says
-`$vc-operator` inside the current conversation, the current agent adopts this
-orchestration posture. A separate runtime run exists only when the operator or
-framework launches `vibecrafted operator <agent> ...`.
-
-See [CONTRACT.md](CONTRACT.md) for the binding posture/runtime split.
-
-## Mandatory Entrypoint
-
-Read [RUNNER.md](RUNNER.md) first.
-
-`SKILL.md` defines the posture. `RUNNER.md` is the deterministic runbook. The
-other documents are supporting surfaces:
-
-- [FLOW.md](FLOW.md) - orchestration loop and artifacts.
-- [TAXONOMY.md](TAXONOMY.md) - operator posture vs runtime taxonomy.
-- [FRAME.md](FRAME.md) - Worker / Owner / Operator role boundaries.
-- [GUIDE.md](GUIDE.md) - wave atlas structure.
-- [DISPATCH.md](DISPATCH.md) and [DISPATCH_TEMPLATE.md](DISPATCH_TEMPLATE.md) -
-  worker brief contract.
-- [AWAIT.md](AWAIT.md) - await/recovery discipline.
-- [AUTONOMY.md](AUTONOMY.md) - autonomy boundaries and the operator button.
-- [JOURNAL.md](JOURNAL.md) - append-only operator journal.
-- [RUNTIME.md](RUNTIME.md) - runtime launch and artifact contract.
-- [WHY_MATRIX_TABLE.md](WHY_MATRIX_TABLE.md) - agent routing.
+`vc-operator` is an interactive orchestration posture (`$vc-operator`), distinct from `vc-partner` (strategy), `vc-ownership` (single slice), `vc-init` (orientation), and runtime runs (`vibecrafted operator <agent> ...`; see [CONTRACT.md](CONTRACT.md)). Read [RUNNER.md](RUNNER.md) first; supporting surfaces ([FLOW.md](FLOW.md), [TAXONOMY.md](TAXONOMY.md), [FRAME.md](FRAME.md), [GUIDE.md](GUIDE.md), [DISPATCH.md](DISPATCH.md), [DISPATCH_TEMPLATE.md](DISPATCH_TEMPLATE.md), [AWAIT.md](AWAIT.md), [AUTONOMY.md](AUTONOMY.md), [JOURNAL.md](JOURNAL.md), [RUNTIME.md](RUNTIME.md), [WHY_MATRIX_TABLE.md](WHY_MATRIX_TABLE.md)) are indexed in [references/taxonomy-and-adjacent.md](references/taxonomy-and-adjacent.md).
 
 ## Canonical Orientation Gate
 
@@ -168,19 +125,7 @@ implement them.
 
 ## The Brief-Gate — never dispatch a shell (scaffold-doctor)
 
-Before firing ANY wave, the plan MUST pass the **scaffold-doctor** gate: every cut in the wave
-atlas has a rendered `briefs/<wave>-<slot>_<slug>.md` with all 12 sections, atomic verifier-backed
-acceptance, and a design doc for every `needs_design` cut.
-
-- A thin `master-dispatch.md` with no per-cut briefs is a **shell (wydmuszka)** — refuse to dispatch it.
-- If any cut lacks a brief, do NOT improvise it at fire time and do NOT fire without it. Return to
-  `vc-scaffold` (Phase 5) to render the missing briefs, then re-gate.
-- The gate is **machine-checked, not agent-promised** (`vibecrafted-server/control-core`) — the same
-  artifact-as-truth gate every read-write cadence handoff (scaffold→implement, marbles→audit…) uses.
-
-This is the operator-side half of the brief-per-cut rule: scaffold renders the briefs, operator
-refuses to conduct without them. Together they make "the flow does not deliver" structurally
-impossible — not a discipline the agent must remember.
+Every cut in the wave atlas MUST have a rendered 12-section brief (`briefs/<wave>-<slot>_<slug>.md`) and a design doc for any `needs_design` cut; a thin `master-dispatch.md` is a shell and must be returned to `vc-scaffold` before firing. Machine-checked by `vibecrafted-server/control-core`: [references/operating-protocol.md#the-brief-gate--never-dispatch-a-shell-scaffold-doctor](references/operating-protocol.md#the-brief-gate--never-dispatch-a-shell-scaffold-doctor).
 
 ## Stop Point
 
@@ -193,57 +138,11 @@ Operator mode may make the work verified and handoff-ready, and may execute acti
 permitted by the plan/session. If permission is absent or ambiguous, stop and
 write the handoff instead of improvising authority.
 
-## Operating Loop
+## Operating Loop & Dispatch Law
 
-1. Run or consume fresh `vc-init` evidence.
-2. Read the plan and all cited files in full.
-3. Reshape through `vc-scaffold` if the plan is not dispatchable.
-4. Build the wave atlas.
-5. Verify each cut against Loctree.
-6. Pick agents through `WHY_MATRIX_TABLE.md`.
-7. Render worker briefs from `DISPATCH_TEMPLATE.md`.
-8. Scan each brief for insecure commands and hard-stop triggers.
-9. Fire one wave at a time through `vibecrafted <skill> <agent>`.
-10. Await durable artifacts.
-11. Verify reports, gates, branch, and SHA.
-12. Scan landed commits for secrets, personal data, local-only paths, local
-    network topology, IP addresses, and internal documents.
-13. Use recovery dispatch on stalls; never blind restart.
-14. Update the tracker and append material decisions to the canonical journal.
-15. Synthesize wave close-out.
-16. Continue or stop at the unpermitted operator button.
+Run the 16-step wave loop (consume `vc-init` -> build wave atlas -> Loctree check -> agent selection via `WHY_MATRIX_TABLE.md` -> render briefs -> security scan -> fire one wave at a time via `vibecrafted <skill> <agent> --file <brief>` -> await durable artifacts -> verify gates/branch/SHA/secrets -> recovery on stalls -> journal -> wave close-out -> stop at unpermitted operator button). All ordinary fleet dispatches default to `headless` (`runtime="visible"` / `--runtime terminal` only for TTY-proven paths); never substitute native subagents for telemetry-backed worker dispatch.
 
-## Dispatch Law
-
-Every external worker dispatch goes through the framework launcher:
-
-```bash
-vibecrafted <skill> <agent> --file <brief>
-```
-
-No native subagents for fleet dispatch in operator mode. Native delegation is
-allowed for parallel recon or small bounded research inside the operator
-session, but dispatched worker slices need telemetry, launch cards, reports,
-transcripts, meta, and awaitable state.
-
-### Headless Worker Boundary
-
-The vc-frame operator session is the **User Session**, not the worker process
-host. Every ordinary fleet dispatch defaults to `headless`, including attended
-work launched while `VC_FRAME_SESSION_NAME` is set. The worker owns durable run
-state and transcript; vc-frame may project those surfaces, and closing a
-projection must not stop the run.
-
-- **CLI and MCP agree.** `vibecrafted <skill> <agent> --file <brief>` and
-  `vc_run_launch` / `vc_launch` default to a detached headless worker.
-- **Observation is explicit and durable.** Use `observe`, `await`, transcripts,
-  run state, and Guardian settlement instead of treating a pane as liveness.
-- **Terminal is an exception.** Pass `runtime="visible"` or
-  `--runtime terminal` only for a provider path proven to require a TTY. Until a
-  daemon-owned PTY broker exists, that compatibility path remains coupled to
-  the terminal and does not inherit the survival guarantee of a headless run.
-- **Interactive PTY stays human-owned.** `init`, `operator`, and bare
-  interactive `resume` remain true User Session tabs.
+Full 16-step loop and headless worker boundary: [references/operating-protocol.md](references/operating-protocol.md).
 
 ## Plan Mutation Allowance
 
@@ -277,45 +176,13 @@ See [JOURNAL.md](JOURNAL.md).
 
 ## Adjacent Skills
 
-- `vc-init` - required orientation gate.
-- `vc-scaffold` - plan authoring or reshaping before dispatch.
-- `vc-ownership` - each worker may operate with ownership inside its slice; the
-  operator owns the chain.
-- `vc-partner` - shared strategy before a plan is dispatchable.
-- `vc-marbles` - convergence when a slice fails on truth drift.
-- `vc-audit` / `vc-review` / `vc-followup` - verification surfaces after waves.
-- `vc-release` - outward ship once release actions are permitted by plan/session
-  or the operator button has been pressed.
+Orchestration touches `vc-init` (orientation), `vc-scaffold` (plan reshaping), `vc-ownership` (slice execution), `vc-partner` (pre-dispatch strategy), `vc-marbles` (truth-drift convergence), `vc-audit` / `vc-review` / `vc-followup` (post-wave verification), and `vc-release` (outward ship). Role details: [references/taxonomy-and-adjacent.md#adjacent-skills](references/taxonomy-and-adjacent.md#adjacent-skills).
 
-## Anti-Patterns
+## Anti-Patterns & Output Shape
 
-- Acting like a solo implementer after the operator asked for orchestration.
-- Dispatching before the plan is readable as a wave atlas.
-- Re-firing a stalled wave instead of reading artifacts and issuing recovery.
-- Spawning native subagents as substitutes for telemetry-backed worker dispatch.
-- Silently downgrading model tier or violating agent fairness.
-- Claiming wave green without report, gate, branch, and SHA evidence.
-- Authoring worker commits or close-outs as if the operator did their work.
-- Making a vc-frame tab or session the process owner for an ordinary worker.
-- Pushing, merging, deploying, or publishing without written plan/session
-  permission or an explicit operator button press.
+Never act as solo implementer, dispatch without a wave atlas, blind-restart stalled waves, substitute native subagents for fleet telemetry, downgrade model tier, claim green without report/gate/branch/SHA evidence, or push/merge/deploy without explicit plan/session permission or an operator button press. Progress updates report state, evidence, decision, and one next move; final handoffs report coverage, SHAs, gates/risks, recoveries, and remaining operator buttons.
 
-## Output Shape
-
-For progress:
-
-1. Current state - wave, prompt, agent, run ID, branch/SHA if landed.
-2. Evidence - report/gate/artifact status.
-3. Decision - continue, recover, pause, or stop.
-4. Next move - exactly one.
-
-For final handoff:
-
-1. Plan and wave coverage.
-2. Worker outputs and SHAs.
-3. Gates and unresolved risks.
-4. Recovery actions taken.
-5. Stop-point handoff: what button remains for the operator.
+Full lists and templates: [references/operating-protocol.md#anti-patterns](references/operating-protocol.md#anti-patterns).
 
 ## Verification in the dispatch footer
 

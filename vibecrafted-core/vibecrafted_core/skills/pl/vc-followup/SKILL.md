@@ -169,19 +169,7 @@ Powinien czytać się jak poimplementacyjny check trajektorii.
 
 ## Kształt wyjścia
 
-Domyślna struktura wyjścia:
-
-1. **Bieżący stan** — co istnieje teraz i co się zmieniło od ostatniego pushu implementacyjnego
-2. **Co wciąż jest nie tak** — luki, dryf, kruchość, niedokończone powierzchnie
-3. **Verdict kierunku** — czy praca zmierza w dobrym kierunku, czy nie
-4. **Następny ruch** — kontynuacja o największej dźwigni
-
-Jeśli to istotne, jawnie rozdziel:
-
-- luka w kodzie
-- luka w runtime
-- luka w UX
-- luka w dokumentacji/pakowaniu
+Raportuj w czterech częściach — Bieżący stan, Co wciąż jest nie tak, Verdict kierunku oraz Następny ruch — rozdzielając luki w kodzie, runtime, UX i dokumentacji/pakowaniu. Szczegółowa struktura: [references/output-and-anti-patterns.md](references/output-and-anti-patterns.md).
 
 ## Relacja do innych skilli
 
@@ -192,10 +180,4 @@ Jeśli to istotne, jawnie rozdziel:
 
 ## Antywzorce
 
-Nie:
-
-- sprowadzaj `vc-followup` do synonimu `vc-review`
-- zmuszaj go do zależności od PR lub zakresu commitów, gdy prawdziwe pytanie jest kierunkowe
-- zwracaj samych findingów bez powiedzenia, czy bieżąca trajektoria jest zdrowa
-- myl „wciąż są luki" z „kierunek jest zły"
-- pomijaj followup powierzchni produktu i patrz tylko na kod
+Nie sprowadzaj `vc-followup` do `vc-review`, nie wymuszaj PR-a ani zakresu commitów, nie zwracaj samych findingów bez werdyktu kierunku i nie myl istnienia luk ze złą trajektorią. Pełna lista: [references/output-and-anti-patterns.md](references/output-and-anti-patterns.md).

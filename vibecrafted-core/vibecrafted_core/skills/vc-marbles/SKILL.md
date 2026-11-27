@@ -85,44 +85,9 @@ reports); **semgrep / linters** (current quality surface); **git
 status / recent commits**. Without `vc-init`, the agent invents its
 own reality.
 
-Standard launcher:
+Standard launcher: `vibecrafted marbles <agent> --count <n> --prompt '...'` (or `--file <plan>` / `--depth <n>`). After dispatch, arm `vibecrafted await <agent> --run-id <id>` immediately using 3-signal liveness (await verdict, terminal run meta, dead PID + promised report) — never hedge with ad-hoc pollers (`docs/runtime/AGENT_OPS.md`). Unlike `implement`, `marbles` runs fresh agents in a convergence loop after code exists.
 
-```bash
-# Single round (3 runs by default):
-vibecrafted marbles codex --prompt 'Fix the 3 failing portable tests'
-vc-marbles codex --prompt 'Harden the installer shell surface'
-
-# Multiple rounds (convergence loop — runtime spawns fresh agent 3..n times)
-vibecrafted marbles codex --count 5 --prompt 'Stabilize until P0=0'
-vc-marbles claude --count 8 --prompt 'Refactor the 1500 LOC monoliths'
-
-# From a plan file:
-vibecrafted marbles codex --file ~/.vibecrafted/artifacts/vetcoders/vibecrafted/2026_0407/plans/marbles-plan.md
-vc-marbles gemini --count 5 --file /path/to/plan.md
-
-# Crawl back into the canonical store then read 'n' recently
-# implemented plans then fill the all the gaps:
-vibecrafted marbles codex --count 10 --depth n
-vc-marbles claude --depth 12 --prompt 'Focus on "vc-followup assumptions from the last 12 plans'
-```
-
-After dispatch, arm `vibecrafted await <agent> --run-id <id>` immediately,
-supervisor-side. Control-plane JSON, report files, transcripts, panes, and
-scheduled wakeups are diagnostic only, not wake signals. Hedging await with
-ad-hoc pollers/watchers is a Class 3 violation; fix `control_plane.await_run`,
-do not normalize the hedge. See `docs/runtime/AGENT_OPS.md`.
-
-3-signal liveness: await verdict, terminal run meta, worker pid dead, plus
-promised report presence. Two agreeing signals are enough to act, three to
-declare done; any disagreement means treat as live and re-arm await. Known skew:
-rc=0-on-live and meta stuck `active`/`stalled` after real completion.
-
-**Not the same as `vibecrafted implement codex <plan>`.** `implement`
-is how code appears. `marbles` is what happens after code exists but
-still needs to be made truthful and shippable. Each round wraps a
-fresh agent in a convergence loop. `--count` controls outer loop
-iterations.
-
+Full launcher examples and await liveness details: [references/launcher-and-await.md](references/launcher-and-await.md).
 ---
 
 ## Repository Work Doctrine
@@ -150,57 +115,9 @@ product decisions hiding behind "code issues" and leaves them for
 
 ## Cost Awareness: Cold Start, Hot Loop
 
-`vc-marbles` looks expensive only when every agent run is counted as a
-fresh event. That is the wrong accounting model.
+Cold start is expensive; repeated hot rounds over the same repository, task surface, failing gates, architectural intent, and prompt exploit cache heat to buy convergence pressure and completeness. Keep the substrate stable across rounds so `vc-polarize` can cut back to one truth with evidence.
 
-The expensive part is the cold start: reading the repo, reconstructing
-intent, finding the real failure surface, and learning where the system
-lies. Once that context is hot, repeated marble runs over the same
-bounded surface are not waste. They are compression.
-
-Marbles exploits cache heat.
-
-A good marble loop keeps the substrate stable:
-
-- same repository
-- same task surface
-- same failing gates
-- same architectural intent
-- same or comparable prompt
-- short time distance between runs
-
-This makes each new worker pay less for archaeology and spend more of
-its budget on deltas: missed cracks, false fixes, brittle assumptions,
-and disagreements between agents.
-
-The goal is not cheap runs. The goal is denser runs.
-
-One isolated agent call gives you one interpretation. A hot marble loop
-gives you convergence pressure. When several workers keep pressing the
-same surface, the remaining disagreements become signal: either the code
-is still lying, or the product truth is smeared.
-
-That is where `vc-polarize` takes over.
-
-Cost rule:
-
-- one cold run discovers the shape
-- repeated hot runs expose convergence
-- stale loops create noise
-- scattered loops destroy cache heat
-- `vc-polarize` decides what survives
-
-Do not scatter marble runs across unrelated initiatives. Do not keep
-rewriting the target surface unless the operator intentionally resets
-the experiment. Marbles works because the swarm keeps pressing against
-the same cracks until the false repairs, overfilled gaps, and real
-structural decisions become visible.
-
-In short: marbles spend warmed context to buy completeness. Cache heat
-makes that completeness cheaper, denser, and comparable across workers.
-
-The excess is deliberate. Marbles fills too much so `vc-polarize` can
-cut back to one truth with evidence, not taste.
+Full cost model and cache-heat rules: [references/cost-and-cache-model.md](references/cost-and-cache-model.md).
 
 ## When To Use It
 
@@ -238,108 +155,18 @@ sits between as READ-ONLY perception.
 
 ---
 
-## Worker Doctrine (Blind on Purpose)
+## Worker Doctrine & Instruments vs Gates
 
-A worker is intentionally **blind to prior marble history**, working
-against the **current workspace state** only. Context weight kills
-quality — an agent working 90 minutes makes worse decisions in minute
-91 than a fresh agent in minute 1, defending sunk cost instead of
-seeing the tree. Every round gets a fresh mind. Not a workaround —
-the design.
+Workers are intentionally **blind to prior marble history**, acting only on the live tree while [`RECEPTION.md`](RECEPTION.md) tracks open findings and convergence across rounds. Run **instruments** (`loctree`, `semgrep`, `aicx-steer`) at the **beginning** to accuse fragile surfaces with evidence, and **tests** at the **end** as verification gates.
 
-The **reception layer** (operator / orchestrator)
-holds the open-finding ledger, candidate comparison across parallel
-rounds, and the decision to converge or fire another wave. See
-[`RECEPTION.md`](RECEPTION.md). Do not load reception into worker
-context.
-
+Full worker doctrine and instruments-vs-gates rationale: [references/worker-doctrine-and-instruments.md](references/worker-doctrine-and-instruments.md).
 ---
 
-## Instruments vs Gates
+## Operating Model, Lenses & Commit Rule
 
-**Instruments** (loctree, semgrep, aicx-steer) go at the **beginning**
-— they direct where to look (prosecution: accusing the tree with
-evidence).
+One invocation = one bounded round: accuse the present tree with evidence, pick at most **3 targets** along the weakest stabilization lens (`Access & Isolation`, `Data Health`, `Errors & Observability`, `Release & Runtime Resilience`), fortify, gate, make exactly **one** `marble:` commit, and write the round report to `$VIBECRAFTED_HOME/artifacts/.../marbles/reports/`. **The worker stops here** — do not self-extend or instruct your successor (see [`FLOW.md`](FLOW.md) and [`RECEPTION.md`](RECEPTION.md)).
 
-**Tests** (pytest, cargo test, build) go at the **end** — they verify
-the fix (the gate).
-
-Tests-first collapses field of vision to "what fails" instead of
-"what is fragile". Red tests scream loudest, but the real structural
-weakness is often silent.
-
----
-
-## Operating Model (Single Round)
-
-One invocation = one bounded round.
-
-1. **Accuse the present tree.** Every target traces to: tool output,
-   failing gate, structural audit, or production-risk counterexample.
-   **No evidence, no target.**
-2. **Pick the smallest high-impact surface.** At most **3 targets**
-   per round. Prefer high-severity breakage, high-frequency paths,
-   silent failure modes, weak boundaries, issues that close a class
-   of failure. When multiple surfaces disagree about reality or code
-   forces a hidden product decision, **expose it but do not decide
-   it** — that's `vc-polarize`'s job.
-3. **Fortify.** Smallest set of changes that materially increases
-   truth. Add missing scoping/auth, missing indexes, replace
-   swallowed exceptions with actionable handling, add smoke tests,
-   collapse duplicated contracts, delete rotten wrappers. Vetcoders
-   axiom: **move on over backward compatibility** — cut cleanly if
-   a local abstraction is rotten and blocks stabilization.
-4. **Gate.** Narrowest credible gates first; broader if warranted.
-   Minimum: syntax / lint for touched surfaces, tests covering the
-   fortified path, relevant build/bundle checks. If a gate fails:
-   report plainly, count regression, do not bury under narrative.
-5. **Commit.** Exactly one round commit with the convention below.
-6. **Report.** Save to
-   `$VIBECRAFTED_HOME/artifacts/<org>/<repo>/<YYYY_MMDD>/marbles/reports/<ts>_marble_<run_or_round_id>_<agent>.md`.
-
-**The worker stops here.** Do not self-extend into the next round.
-Do not write instructions to your successor. The reception layer
-decides what fires next.
-
-Full single-round detail (instruments, lenses, locker-room rule)
-lives in [`FLOW.md`](FLOW.md). Reception / convergence routing lives
-in [`RECEPTION.md`](RECEPTION.md).
-
----
-
-## Stabilization Lenses
-
-If there is no exact task description pick the one matching the weakest live surface:
-
-- **Access & Isolation** — auth, tenant scoping, role checks, permission boundaries
-- **Data Health** — indexes, query plans, N+1s, schema hotspots, God tables
-- **Errors & Observability** — swallowed exceptions, silent failures, missing alerts
-- **Release & Runtime Resilience** — CI/CD gates, smoke tests, rollout safety, config drift
-
-A round may touch one lens or a tightly coupled cluster. Do not force
-pillar order if evidence says otherwise.
-
----
-
-## Commit Rule
-
-**One round = one commit.** No partial commits. No squashing across
-rounds. No mining git history to decide your subject line.
-
-Format:
-
-```
-marble: <one-line summary>
-
-- <file>: <what changed and why>
-
-Gate: <pass|fail>
-Tests: <what ran>
-Regressions: <count>
-Round-ID: <opaque-id-if-provided>
-```
-
----
+Full 6-step round protocol, stabilization lenses, and commit format: [references/round-protocol-and-lenses.md](references/round-protocol-and-lenses.md).
 
 ## Branch and Tree Guard
 
@@ -352,40 +179,11 @@ in the report.
 
 ---
 
-## Composition with adjacent skills
+## Composition & Anti-Patterns
 
-- **`vc-init`** — required gate. Every round begins here.
-- **`vc-audit`** — downstream READ-ONLY falsification. Audit checks
-  whether the swarm's claimed fixes actually landed against a written
-  plan.
-- **`vc-polarize`** — downstream WRITE step. After marbles flood +
-  audit verdict, polarize strips back to one truth.
-- **`vc-review`** — adjacent READ-ONLY review on bounded diffs. A
-  marbles round commit can be reviewed individually before swarm
-  continuation.
-- **`vc-followup`** — adjacent READ-ONLY trajectory check. Use after
-  marbles wave to assess overall direction health.
+`vc-marbles` pairs with `vc-init` (required entry), `vc-audit` (downstream READ-ONLY falsification), `vc-polarize` (downstream WRITE cut to one truth), `vc-review`, and `vc-followup`. Avoid historical self-awareness, convergence cosplay, surface-area vanity, narrative inflation, parallel contamination, solving product smear in the worker, or self-extension.
 
----
-
-## Anti-Patterns
-
-- **Historical self-awareness** — reading prior marble artifacts to sound informed
-- **Convergence cosplay** — talking about step size / delta / loop mastery
-- **Surface-area vanity** — touching many files to make the round look bigger
-- **Polishing theater** — cleanup that doesn't close a failure mode
-- **Backward-compatibility worship** — preserving rotten contracts
-- **Narrative inflation** — long explanations hiding a weak gate
-- **Parallel contamination** — importing another marble's context
-- **Fake omniscience** — pretending to see the full global backlog
-- **Agent contempt** — treating other agents as inferior; why-matrix is
-  a map of styles, not a hierarchy of worth
-- **Solving product smear in the worker** — expose, do not decide;
-  leave it for polarize
-- **Self-extension** — writing the next round's plan from inside this
-  round
-
----
+Full composition notes, anti-pattern catalogue, and closing rail: [references/composition-and-antipatterns.md](references/composition-and-antipatterns.md).
 
 ## Finish Condition
 
@@ -409,23 +207,7 @@ parallel-round routing. Then accuse the present tree.
 
 ## Closing Rail
 
-```text
-=======================
-Remember: marbles mode is permission to write the small or braad truthful
-fix, not permission to refactor, unless it is clearly given as a task
-description. You don't need to bother about the overgrown code around the
-certain parts of the codebase, but you have the hard obligation to describe
-it in the report if encountered.
-The worker sees the tree, never the factory. One round, one commit, one report.
-Then leave. The swarm produces the excess; polarize strips it.
-(•̀⌄•́)و ̑̑
-=======================
-
-Dad's joke: Why does the marble worker never argue with the next worker?
-Because by then it's already left the locker room.  (._.)
-```
-
----
+The worker sees the tree, never the factory: one round, one commit, one report, then leave. See [references/composition-and-antipatterns.md](references/composition-and-antipatterns.md).
 
 ## Verify before the handoff
 

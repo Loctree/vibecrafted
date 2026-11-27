@@ -67,59 +67,14 @@ bez repozytorium zbadaj dostarczone materiały i wskaż brakującą intencję.
 
 ## Drzewo projektu
 
-Odwiedź istotne gałęzie w tej kolejności, pomijając decyzje już rozstrzygnięte
-aktualnymi dowodami lub jawną odpowiedzią Foundera:
-
-1. **Zakres i granice:** efekt dla użytkownika, najmniejszy użyteczny zakres
-   zmiany oraz jawne wyłączenia.
-2. **Architektura i model danych:** własność stanu, kontrakty, trwałość danych
-   i istniejące rozwiązania warte ponownego użycia.
-3. **Runtime i integracja:** punkty wejścia, wywołujący, środowisko wykonania,
-   odpowiedzialność za integrację i propagacja błędów.
-4. **Przypadki brzegowe i awarie:** niedostępne usługi, uprawnienia, wyścigi,
-   przerwana praca i sposób odzyskiwania.
-5. **Weryfikacja i DoU:** obserwowalna akceptacja, sensowne testy oraz dowody
-   produktowe potrzebne, by rezultat dało się znaleźć, wypróbować, zrozumieć,
-   obdarzyć zaufaniem i dostarczyć.
-
-Nie wymyślaj niepewności, by wypełnić drzewo. Wybierz następny nierozstrzygnięty
-węzeł, którego odpowiedź odblokuje najwięcej zależnych decyzji.
+Odwiedź nierozstrzygnięte gałęzie w kolejności zależności (pomijając decyzje rozstrzygnięte dowodami lub odpowiedzią Foundera): **1. Zakres i granice** · **2. Architektura i model danych** · **3. Runtime i integracja** · **4. Przypadki brzegowe i awarie** · **5. Weryfikacja i DoU**. Wybieraj węzeł odblokowujący najwięcej zależnych decyzji. Pełny opis gałęzi: [references/protocol-and-contract.md](references/protocol-and-contract.md).
 
 ## Protokół kolejnych tur
 
-Przed pierwszym pytaniem zbadaj dostępne dowody i wskaż główną niejednoznaczność.
-W każdej turze:
-
-- Nazwij bieżący węzeł i krótko wyjaśnij, dlaczego wybór ma znaczenie.
-- Przedstaw istotne opcje, po jednej korzyści i jednym koszcie każdej.
-- Zapisz **Moja rekomendacja (agent):** wybraną opcję i uzasadnienie.
-- Zadaj jedno bezpośrednie pytanie o tę decyzję, a potem czekaj.
-- Zapisz odpowiedź z jej źródłem i zaktualizuj pozostałe drzewo.
-
-Jeśli jest dostępne narzędzie do pytań, może przedstawić tę jedną decyzję.
-W przeciwnym razie zapytaj na czacie. Dostępność narzędzi nie uzasadnia łączenia
-pytań ani przenoszenia wywiadu do zadania w tle.
+Przed pierwszym pytaniem zbadaj dowody. W każdej turze nazwij węzeł i wagę wyboru, przedstaw opcje (korzyść i koszt), podaj **Moja rekomendacja (agent)** z uzasadnieniem, zadaj jedno bezpośrednie pytanie i czekaj, potem zapisz odpowiedź ze źródłem. Nigdy nie łącz pytań ani nie przenoś wywiadu w tło. Pełny protokół: [references/protocol-and-contract.md](references/protocol-and-contract.md).
 
 ## Warunek zakończenia i Design Contract
 
-Zakończ, gdy istotne gałęzie nie mają nierozstrzygniętych zależności blokujących
-ani ukrytych założeń implementacyjnych. Jeśli Founder zakończy wywiad wcześniej,
-oznacz kontrakt jako częściowy i ujawnij otwarte decyzje; nie wymyślaj odpowiedzi.
-
-Zwróć w rozmowie zwięzły **Design Contract**, gotowy do wykorzystania w planie
-implementacji lub `vc-dou`:
-
-- **Cel i zakres:** oczekiwany rezultat i jawne granice.
-- **Decyzje:** uzgodnione wybory, odrzucone alternatywy, powody oraz wskazanie
-  źródła: odpowiedź Foundera, dowód z kodu albo propozycja agenta.
-- **Architektura i runtime:** własność stanu i kontraktów, punkty wejścia,
-  ścieżka integracji oraz zachowanie przy awarii i odzyskiwaniu.
-- **Akceptacja i DoU:** konkretne obserwowalne rezultaty, kroki weryfikacji
-  i wymagane dowody produktowe.
-- **Otwarte kwestie:** jawnie odroczone pytania, ich wpływ i właściciel;
-  pytania blokujące utrzymują częściowy status kontraktu.
-
-Wywiad daje kontrakt. Implementacja wynika z zakresu upoważnienia od użytkownika;
-samo zakończenie wywiadu nie uprawnia do edycji ani publikacji.
+Zakończ, gdy brak nierozstrzygniętych zależności blokujących lub ukrytych założeń (przy wcześniejszym końcu oznacz kontrakt jako częściowy i wskaż otwarte kwestie bez zmyślania odpowiedzi). Zwróć zwięzły **Design Contract** (Cel i zakres · Decyzje ze źródłem · Architektura i runtime · Akceptacja i DoU · Otwarte kwestie); zakończenie wywiadu nie uprawnia jeszcze do edycji ani publikacji. Szablon: [references/protocol-and-contract.md](references/protocol-and-contract.md).
 
 _𝚅𝚒𝚋𝚎𝚌𝚛𝚊𝚏𝚝𝚎𝚍. with AI Agents by Vetcoders (c)2024-2026 LibraxisAI_
