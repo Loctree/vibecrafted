@@ -3575,6 +3575,14 @@ def test_native_stopped_pair_refuses_incomplete_or_live_evidence(
         endpoint.bind(("127.0.0.1", supervisor["endpoint"]["port"]))
         if contradiction == "foreign_listener":
             endpoint.listen()
+        else:
+            # Linux refuses a connect to a bound, non-listening socket; macOS
+            # lets it time out. Pin the refusal on every host so this case
+            # proves the bind check, not the host's connect timeout.
+            def refused(*_args: object, **_kwargs: object) -> socket.socket:
+                raise ConnectionRefusedError(111, "Connection refused")
+
+            monkeypatch.setattr(installer.socket, "create_connection", refused)
     elif contradiction == "bad_schema":
         receipt["schema"] = "not-a-native-execution-receipt"
     elif contradiction == "contradictory_public_url":
