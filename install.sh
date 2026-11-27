@@ -567,21 +567,20 @@ detect_linux_distro() {
 # Map CLI tool names to distro package names where they diverge (Debian's
 # `make` lives in build-essential, not a standalone `make` on minimal images).
 preflight_pkg_names() {
-  local tool pkg duplicate existing
-  local -a tools=() seen=()
+  local tool pkg joined=""
   for tool in "$@"; do
     pkg="$tool"
     case "$LINUX_PKG_MGR:$tool" in
       apt:make) pkg=build-essential ;;
     esac
-    duplicate=0
-    # macOS /bin/bash 3.2 treats an empty array as unbound under set -u.
-    for existing in ${seen[@]+"${seen[@]}"}; do
-      [[ "$existing" == "$pkg" ]] && duplicate=1 && break
-    done
-    [[ "$duplicate" == "1" ]] || { seen+=("$pkg"); tools+=("$pkg"); }
+    # Each package once, space-separated: no array (macOS bash 3.2 calls an
+    # empty one unbound under set -u) and no IFS change.
+    case " $joined " in
+      *" $pkg "*) ;;
+      *) joined="${joined:+$joined }$pkg" ;;
+    esac
   done
-  (IFS=' '; printf '%s' "${tools[*]-}")
+  printf '%s' "$joined"
 }
 
 # preflight_pkg_hint emits a copy-pasteable install command for the named
