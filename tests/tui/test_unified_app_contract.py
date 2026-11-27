@@ -1475,7 +1475,13 @@ def test_native_app_bootstraps_and_launches_only_the_canonical_product_entry() -
     assert "timeoutFlag.mark()" in native_runner
     assert "MainActor.assumeIsolated { completion(result) }" in native_runner
     assert "process.terminationHandler = nil" in native_runner
-    assert "durable transaction will recover or report its lease state" in delegate
+    # The installer failure copy (timeout included) is owned by the policy
+    # function the delegate routes every non-zero exit through.
+    policy = (
+        REPO_ROOT / "vibecrafted-app/shell-agent/app/Vibecrafted/ServerMenuPolicy.swift"
+    ).read_text(encoding="utf-8")
+    assert "durable transaction will recover or report its lease state" in policy
+    assert "runtimePackInstallerFailureDetail(" in delegate
     repair = delegate[
         delegate.index("@objc private func repairRuntime()") : delegate.index(
             "private func offerConfigurationRepair"
