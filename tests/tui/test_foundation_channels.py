@@ -778,8 +778,13 @@ def _assert_terminal_branch(
 ) -> None:
     output = result.stdout + result.stderr
     if state == "not-macos":
-        assert result.returncode == 0, output
-        assert "vc-terminal is a macOS app; nothing to install" in output
+        # A real run refuses the explicit target off macOS (5a8dfa61); install.sh
+        # names vc-terminal on macOS only, and --check reports "nothing to install".
+        assert result.returncode == 1, output
+        assert "vc-terminal requires macOS; omit this target on linux" in output
+        assert _last_stderr_line(result).endswith(
+            "Resolve this refusal and retry Upgrade."
+        ), output
     elif state == "admitted":
         assert "vc-terminal already installed" in output
     elif state == "unpublished-host":
@@ -820,6 +825,46 @@ def test_a_matching_vc_terminal_asset_still_needs_the_publishers_signature(
         _terminal_state(),
         "is not io.vetcoders.vc-terminal signed by Developer ID team MW223P3NPX",
     )
+
+
+def test_a_linux_runtime_launcher_is_that_runtimes_own_frame(tmp_path: Path) -> None:
+    """Install (Linux Matrix), 2026-11-20 on: every fresh Linux install refused.
+
+    A Linux Runtime Pack carries the vc-frame engine (libexec) and publishes its
+    product-entry launcher in the launcher bin before foundations run. The
+    resolver skips runtime launchers by design, so vc-frame provisioning (the
+    default run since 09649c28, install.sh's explicit target since 5a8dfa61)
+    met the runtime's own frame as "another install". Off macOS that launcher
+    is the frame; on macOS the runtime publishes none, and the refusal stays.
+    """
+    _vcframe_release(tmp_path)
+    body = (
+        "#!/bin/bash\n"
+        f"export VIBECRAFTED_RUNTIME_ROOT={tmp_path / 'runtime/generation'}\n"
+        'exec "$VIBECRAFTED_RUNTIME_ROOT/bin/vc-frame" "$@"\n'
+    )
+    launcher = _executable(tmp_path / "home/.local/bin/vc-frame", body)
+
+    for system, machine in (("Linux", "x86_64"), ("Darwin", "arm64")):
+        fake = tmp_path / f"uname-{system}"
+        _executable(
+            fake / "uname",
+            f'#!/bin/sh\ncase "$1" in -s) echo {system} ;; -m) echo {machine} ;;'
+            ' *) /usr/bin/uname "$@" ;; esac\n',
+        )
+        result = _run_frame_installer(
+            tmp_path, path=[fake, tmp_path / "home/.local/bin", tmp_path / "bin"]
+        )
+        output = result.stdout + result.stderr
+        if system == "Linux":
+            assert result.returncode == 0, output
+            assert "vc-frame is carried by the Runtime Pack" in output
+            assert "belongs to another install" not in output
+        else:
+            assert result.returncode == 1, output
+            assert "belongs to another install; not overwriting it" in output
+        assert launcher.read_text(encoding="utf-8") == body
+        assert not _frame_store(tmp_path).exists()
 
 
 def test_the_default_macos_run_includes_vc_terminal(tmp_path: Path) -> None:

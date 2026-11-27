@@ -85,6 +85,10 @@ def test_private_child_fence_controls(tmp_path):
     assert network.returncode == 0, network.stderr
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the copied child host is the macOS product terminal; a Linux pack carries libexec/vc-terminal",
+)
 @pytest.mark.parametrize("damage", ["missing", "malformed", "symlink", "code"])
 def test_copied_child_host_admission_precedes_drift_refusal(installed, damage):
     paths, payload, result = installed

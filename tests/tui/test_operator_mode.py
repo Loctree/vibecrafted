@@ -13,6 +13,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from _generation_local_host import present_generation_local_host
+
 from tests._apple_trust_fixture import bind_apple_trust_in_copy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -345,7 +347,18 @@ def test_vc_start_refuses_storage_and_explicit_lobby_before_git(tmp_path: Path) 
         assert "unexpected Git probe" not in result.stderr
 
 
-def test_compiled_vc_start_enters_lobby_through_bundled_shell(tmp_path: Path) -> None:
+def test_compiled_vc_start_enters_lobby_through_bundled_shell(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The shell side of the entry runs the generation-local terminal host on
+    # every host (tests/_generation_local_host.py). On Darwin the shell
+    # otherwise admits vc-terminal only at the fixed
+    # /Applications/vc-terminal.app, so the test passed on a Mac with the
+    # product installed and failed on one without it. Terminal admission keeps
+    # its own coverage in test_external_products. The compiled entry still
+    # admits Frame through the Python resolver, which follows sys.platform;
+    # that boundary is doubled below for the fixture path only.
+    present_generation_local_host(monkeypatch, tmp_path)
     home = tmp_path / "home"
     home.mkdir()
     crafted_home = home / ".vibecrafted"

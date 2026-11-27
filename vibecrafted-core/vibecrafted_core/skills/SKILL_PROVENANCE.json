@@ -1,6 +1,6 @@
 {
   "schema": "vibecrafted.skill-provenance.v3",
-  "generated_at": "2026-11-20",
+  "generated_at": "2026-11-26",
   "skills": {
     "vc-agents": {
       "sha256": [
@@ -1908,6 +1908,7 @@
           "ea098d580bec3552ab29e95fbece2d8647f92b03"
         ],
         "FLOW.md": [
+          "037b8a8dccff57100492417cbfb5c1291a7edee0",
           "09326f243272841ee9eb6e446a912d17a4dcd907",
           "10f9b74d46ba3caa903670d1c7401ba9f95dd626",
           "345455e763990fa8ce50b68c2c4c140593862af6",
@@ -1963,6 +1964,7 @@
           "859a5ed3fe453ad0ec2b7928e4cb77bfc5a085dd",
           "baee8f24641facaf812cb60c522a3a8429fe15de",
           "bb900bad7680f8ce4fefe1b48b6a41f99e4619f4",
+          "e75eb6762f51d5b8b8be717f6dac36e4b9d749a1",
           "fc3d5dc315fe8929639cf6765f48e81af9442088"
         ]
       }
@@ -2235,6 +2237,7 @@
           "fdf91c0cf4bfc9d2b30a32416b07409da3d18930"
         ],
         "FLOW.md": [
+          "0f3d644b6acef9c616398c5b094795e8e8e80c27",
           "2ff92b4aa3687649f1a009f4a3d7097d2f47107a",
           "3b52109b058d6eb2d2fb753beb25fb197beccff0",
           "528099a31fe05a60c8655dc4fbc279ca00ad0fa1",
@@ -2492,6 +2495,7 @@
     "vc-intents": {
       "sha256": [
         "04ce7e799e38b94b74706ea3fce2c1ada2281ad174cd2e1e320d03c6652db4df",
+        "0535c03cea67deeadc75994611a7e8f763e3bee0adc09d8450365df09607b7f7",
         "08c35a9e76a0fe6a5f287bc72486b23f589c65a99349968bd5962c86ec700b47",
         "08dfbde9b5a6a6d15f439936535954dc18c8fc5641107269c4144ce13a18d363",
         "0f048f0d4019ec0462cae3eb4e6e999a79d8d7f6405ded7bedd9a814204cd8cc",
@@ -2518,6 +2522,7 @@
         "77a784280e2d1ba5b57d7c532a960406abb5d9de830720682053825f828a8f10",
         "7b8f2b29fc1d89e00d2306cf158f0be687121c73548565ea58863804c0bda55a",
         "8b868273914bd9bdb6dec005dddce9f2ac38aebb23afd84989b3fbde876920c9",
+        "8e4d27d8ab99f0833f79c91e8fc24a8e7ba1e36b35e71406e5a655cc250204e4",
         "9536e9868fad402e0df057ea7776809edf66cc11e58cfe1e5387549e298070ab",
         "a282947353279ca61b9c9cf39f1e6e0013ba54a514d6faa4b52160177cdefadb",
         "a3379d405deffd6a4bcd31568c571e00c4cb737778dd129136de2299613de24c",
@@ -2556,11 +2561,13 @@
           "763173b61d9478a666e3dae8b8e39fbbab64e85b",
           "8b5a28ee77e3830f617a75775bf7412724636e5e",
           "92e5df997224051a8cb6f1841781ae30d0eb5d90",
+          "b5ff6d201b28914165cb5111a7a20f98cb55bf4a",
           "bb8707b79ce39e472237de9b2ef8e9d8b347a3b5",
           "d49b80afa10440b5e8725ce43b49d80cb2b97f16",
           "fc299c2fafc2a398d3e08728b2504b5a9bd0f5b3"
         ],
         "SKILL.md": [
+          "080849f367eb0d907a0b80cc842588775e5f9870",
           "0d2caba90b97decb892351091bd90ed836956713",
           "0e64b492d194acb10cb93cd770688a6f54c8b19e",
           "0fd6ae033b71a9b5960c28b5846eeeef9f978c82",
@@ -2585,6 +2592,7 @@
           "90e4c55cd8f4f6dfa2ceccfc0ed90291eb29d36c",
           "9323c4a18d310599ab381e6d7b754b9f5be70d50",
           "97300eab8b9397ced20f03eab36a1c05f75cdc4d",
+          "a0daebc697b325b191046411586e827f1f3e7016",
           "a7494e83267a765bf328ced99814996b93f028d5",
           "a8b42174aafb367582913a76797f58c8ef52dcd7",
           "ab06779cff47589cbdb88ef4f651d791ee5f6bd3",
@@ -2675,6 +2683,7 @@
           "1504db79ac6525e76277f3f7f2d20a2a528801d8",
           "2e71925846479e3f5d5713273f4610fc629c206a",
           "4e8a82225ad7154bd3705c34f4d9195fee68ca82",
+          "6627170f6d964ae567dd583b979fc2a9e30b0642",
           "679dc63b0c3c60f71362db49f07a5b449084d14f",
           "7ca2d175d1d79fd3cbe0d6253dca78a10f65d63e",
           "7fa5432d3307610825a183d09529c097c50ea275",
@@ -2717,6 +2726,7 @@
           "f1902bb454833b8c0c012e82e580b9bc8aa9d8b9"
         ],
         "scripts/intents_cli.py": [
+          "19f6c26a63878c0601c4f473f481330e68a3923a",
           "1d5f18bf166e1dbbb1db4134835fa18ebb2f167c",
           "234b9ff40267b687e4ddfd63015449fb8979b8c3",
           "46e82741a8523f2d9e453affd835fb77bca9611d",
@@ -3996,6 +4006,7 @@
           "fbca94877a4598efa48468b18b69c7101dba2e08"
         ],
         "FLOW.md": [
+          "08ffe5dfb5f273bac99ce66c1512d299183e7cfb",
           "0f99c692f427130859656bb3903158e1374d3712",
           "2c288bf2a5e70e7419bc433abf609bde15b141c4",
           "b8f16800f97f38afcdff30cd8af3a09e9a606bcf",

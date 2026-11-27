@@ -5771,6 +5771,19 @@ def _native_runtime_pair_is_quiescent(shared_home: Path) -> bool:
         pass
     except OSError:
         return False
+    # A refused connect proves no listener, not a free endpoint: Linux refuses
+    # a connect to a socket that is bound but not listening (macOS lets it time
+    # out). Binding proves no other socket holds the port; SO_REUSEADDR admits
+    # the stopped server's own TIME_WAIT.
+    try:
+        family, _, _, _, address = socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM
+        )[0]
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(address)
+    except OSError:
+        return False
     for path, metadata in (
         (execution_path, execution_metadata),
         (status_path, supervisor_metadata),
@@ -25126,6 +25139,9 @@ def _load_local_skill_owner() -> Any:
     module = types.ModuleType("_vc_local_skill_owner")
     module.__file__ = str(module_path)
     source = _capture_runtime_bound_file(module_path)
+    # The code is the bytes captured above from the generation's own owner;
+    # an import loader would reopen the path and write __pycache__ into it.
+    # nosemgrep: python.lang.security.audit.exec-detected.exec-detected
     exec(compile(source, str(module_path), "exec"), module.__dict__)  # noqa: S102
     return module
 

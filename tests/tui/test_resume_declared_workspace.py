@@ -49,6 +49,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _generation_local_host import present_generation_local_host
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = REPO_ROOT / "vibecrafted-core" / "vibecrafted_core" / "runtime"
@@ -268,6 +269,13 @@ if rest[:1] == ["action"]:
 
 sys.exit(0)
 """
+
+
+@pytest.fixture(autouse=True)
+def _generation_local_host(tmp_path, monkeypatch):
+    # The fixture generations carry their engines under libexec, the
+    # generation-local contract; see tests/_generation_local_host.py.
+    present_generation_local_host(monkeypatch, tmp_path)
 
 
 def _write(path: Path, body: str) -> Path:

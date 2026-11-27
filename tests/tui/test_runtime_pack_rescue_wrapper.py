@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from _runtime_pack_fixture import (
     fixed_terminal_fixture,
+    fixture_pack_platform,
     private_child_command,
     private_runtime_pack_seed,
     seed_runtime_pack,
@@ -153,10 +154,16 @@ def _wrapper_env(
         encoding="utf-8",
     )
     uname.chmod(0o755)
+    # Only a Darwin host is presented as Darwin/arm64 (an Intel runner too),
+    # because only there is the fixture sealed darwin-arm64. A Linux host
+    # keeps its real uname, which matches its linux-* seal.
+    search_path = os.environ.get("PATH", "")
+    if sys.platform == "darwin":
+        search_path = f"{uname_dir}{os.pathsep}{search_path}"
     env = {
         **os.environ,
         "TMPDIR": str(wrapper_tmp),
-        "PATH": f"{uname_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "PATH": search_path,
         "VIBECRAFTED_RUNTIME_PACK_PUBLIC_KEY": str(public_key),
     }
     if extra:
@@ -165,13 +172,16 @@ def _wrapper_env(
 
 
 def _wrapper_flags(version: str) -> list[str]:
+    # The admission seal declares the host's own pack target; the wrapper must
+    # expect that same target or it refuses the pack as foreign.
+    pack_platform, pack_architecture = fixture_pack_platform()
     return [
         "--expected-version",
         version,
         "--expected-platform",
-        "darwin-arm64",
+        pack_platform,
         "--expected-architecture",
-        "arm64",
+        pack_architecture,
     ]
 
 
@@ -732,12 +742,7 @@ def test_public_wrapper_apply_refuses_changed_archive(
         "--apply",
         "--plan-digest",
         plan["plan_digest"],
-        "--expected-version",
-        "9.9.9+b",
-        "--expected-platform",
-        "darwin-arm64",
-        "--expected-architecture",
-        "arm64",
+        *_wrapper_flags("9.9.9+b"),
         env=env,
     )
     assert applied.returncode == 2, (applied.stdout, applied.stderr)
@@ -1233,17 +1238,8 @@ def test_public_rescue_plan_never_reconciles_installed_service(tmp_path, install
     plist = Path.home() / "Library/LaunchAgents/io.vetcoders.vibecrafted.server.plist"
     plist.parent.mkdir(parents=True)
     plist.write_text("fixture")
-    host_bin = tmp_path / "host-bin"
-    host_bin.mkdir()
-    uname = host_bin / "uname"
-    uname.write_text(
-        '#!/bin/sh\ncase "${1:-}" in\n'
-        '  -s) printf "Darwin\\n" ;;\n'
-        '  -m) printf "arm64\\n" ;;\n'
-        '  *) printf "Darwin\\n" ;;\n'
-        "esac\n"
-    )
-    uname.chmod(0o755)
+    # The host is presented as the fixture's own seal (_wrapper_env): a fixed
+    # Darwin uname here made a Linux host refuse its linux-* fixture as foreign.
     archive, key = _sign_payload_archive(tmp_path / "carrier", payload)
     result = _run_wrapper(
         "--pack",
@@ -1251,7 +1247,7 @@ def test_public_rescue_plan_never_reconciles_installed_service(tmp_path, install
         *_wrapper_flags("9.9.9+a"),
         "--rescue",
         "--plan",
-        env=_wrapper_env(key, {"PATH": f"{host_bin}{os.pathsep}{os.environ['PATH']}"}),
+        env=_wrapper_env(key),
     )
     assert result.returncode == 0, (
         _json_out(result).get("reason"),

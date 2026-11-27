@@ -32,6 +32,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _generation_local_host import present_generation_local_host
 
 _SPEC = importlib.util.spec_from_file_location(
     "declaration_entry_scene", Path(__file__).with_name("test_declaration_entry.py")
@@ -51,6 +52,13 @@ _attaches = _entry._attaches
 _assert_no_foreign_mutation = _entry._assert_no_foreign_mutation
 
 HOST = "session-vibecrafted"
+
+
+@pytest.fixture(autouse=True)
+def _generation_local_host(tmp_path, monkeypatch):
+    # The fixture generations carry their engines under libexec, the
+    # generation-local contract; see tests/_generation_local_host.py.
+    present_generation_local_host(monkeypatch, tmp_path)
 
 
 def _float_panes(calls: list[dict]) -> list[dict]:

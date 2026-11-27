@@ -95,7 +95,7 @@ then
   lease_roots=()
   [[ -z "${CARGO_TARGET_DIR:-}" ]] || lease_roots+=(--lease-root "$CARGO_TARGET_DIR")
   exec "$REPO_ROOT/scripts/vc-build-lease" --root "$REPO_ROOT/build" \
-    "${lease_roots[@]}" -- /bin/bash "$REPO_ROOT/scripts/build-vibecrafted-release.sh" "$@"
+    ${lease_roots[@]+"${lease_roots[@]}"} -- /bin/bash "$REPO_ROOT/scripts/build-vibecrafted-release.sh" "$@"
 fi
 
 # The build -> install handoff record is owned by this library, and it is loaded

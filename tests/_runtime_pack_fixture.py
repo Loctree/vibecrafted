@@ -670,6 +670,74 @@ def seed_runtime_pack(
     return payload
 
 
+def fixture_pack_platform() -> tuple[str, str]:
+    """The Runtime Pack target a sealed fixture must declare on this host.
+
+    The pack contract keys on the declared platform and the installer on the
+    host: a Darwin pack carries no libexec products, while a Linux host needs
+    both native hosts in libexec. A fixture sealed for the other OS satisfies
+    only one of the two.
+    """
+    if sys.platform == "darwin":
+        return "darwin-arm64", "arm64"
+    architecture = "arm64" if platform.machine() in ("arm64", "aarch64") else "x64"
+    return f"linux-{architecture}", architecture
+
+
+def write_linux_fixture_inventory(payload: Path, architecture: str) -> None:
+    """Close a Linux fixture with the inventory its provenance requires.
+
+    Disposable installer fixtures, not executable or build proof: a missing
+    inventoried command becomes a placeholder before it is hashed.
+    """
+    from vibecrafted_core.runtime_pack_contract import (
+        INVENTORY_NAME,
+        LINUX_EXECUTABLES,
+    )
+
+    target = (
+        "aarch64-unknown-linux-gnu"
+        if architecture == "arm64"
+        else "x86_64-unknown-linux-gnu"
+    )
+    executables = []
+    for name in sorted(LINUX_EXECUTABLES):
+        executable = payload / "bin" / name
+        if not executable.exists():
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+        executables.append(
+            {
+                "name": name,
+                "path": f"bin/{name}",
+                "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                "version_argv": ["--version"],
+                "version_output": "installer test fixture",
+                "source_url": "https://example.invalid/installer-fixture",
+                "source_revision": "b" * 40,
+                "source_archive_sha256": "a" * 64,
+                "target": target,
+                "license": "test fixture",
+            }
+        )
+    (payload / INVENTORY_NAME).write_text(
+        json.dumps(
+            {
+                "schema": "io.vetcoders.vibecrafted.runtime-inventory.v1",
+                "platform": f"linux-{architecture}",
+                "architecture": architecture,
+                "executables": executables,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def stage_build_lease_fixture(repo: Path) -> None:
     """Stage the real lease entrypoint and its eager import closure."""
     for name in ("vc-build-lease", "project-python"):

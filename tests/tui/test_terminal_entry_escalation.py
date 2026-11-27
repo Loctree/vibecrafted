@@ -50,6 +50,10 @@ import time
 from pathlib import Path
 
 import pytest
+from _generation_local_host import (
+    generation_local_host_bin,
+    present_generation_local_host,
+)
 from _runtime_pack_fixture import framework_python_delegate
 
 # --import-mode=importlib: the shared fixture module is loaded by file.
@@ -264,6 +268,13 @@ sys.exit(0)
 """
 
 
+@pytest.fixture(autouse=True)
+def _generation_local_host(tmp_path, monkeypatch):
+    # The fixture generations carry their engines under libexec, the
+    # generation-local contract; see tests/_generation_local_host.py.
+    present_generation_local_host(monkeypatch, tmp_path)
+
+
 def _write(path: Path, body: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
@@ -378,6 +389,10 @@ def _run_entry(
     env["VC_FRAME_LIVE"] = str(tmp_path / "frame-live.txt")
     env["VC_FRAME_LAYOUTS"] = str(tmp_path / "frame-layouts.json")
     env.update(extra_env or {})
+    # A test's explicit PATH still meets the generation-local host first.
+    host_bin = str(generation_local_host_bin(tmp_path))
+    if env.get("PATH", "").split(os.pathsep)[0] != host_bin:
+        env["PATH"] = os.pathsep.join(p for p in (host_bin, env.get("PATH", "")) if p)
 
     lines = [f'source "{SHELL_SH}"']
     if with_generation:

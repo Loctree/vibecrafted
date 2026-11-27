@@ -748,22 +748,47 @@ def main(argv: list[str] | None = None) -> int:
     worktrees_command = arguments[:1] == ["worktrees"]
     if worktrees_command:
         arguments = arguments[1:]
-    parser = argparse.ArgumentParser(
-        prog="vc-git worktrees" if worktrees_command else "vc-git",
-        description="Show full Git context, including every worktree.",
-        epilog=(
-            "vc-git worktrees [list|triage|cleanup] [PROJECT] [--target BRANCH] [--json]. "
-            "list and triage only inspect. cleanup (alias: prune) shows what removal "
-            "would cost, asks, then removes worktrees whose work is committed and drops "
-            "registrations of directories that are gone. Branches always stay; "
-            "--dry-run previews, --yes skips the question, --with-ignored also takes "
-            "worktrees holding ignored local files. For merged branches: "
-            "vc-git branches cleanup [--also-remote]. "
-            "Work families: vc-git landed ADDRESS (did it land, also after squash), "
-            "vc-git gems [search QUERY] (unlanded work, only copies first), "
-            "vc-git save [ADDRESS] --to patch|git-apply|commit|stash (keep it without touching it)."
-        ),
-    )
+    if worktrees_command:
+        parser = argparse.ArgumentParser(
+            prog="vc-git worktrees",
+            description="Show full Git context, including every worktree.",
+            epilog=(
+                "vc-git worktrees [list|triage|cleanup] [PROJECT] [--target BRANCH] [--json]. "
+                "list and triage only inspect. cleanup (alias: prune) shows what removal "
+                "would cost, asks, then removes worktrees whose work is committed and drops "
+                "registrations of directories that are gone. Branches always stay; "
+                "--dry-run previews, --yes skips the question, --with-ignored also takes "
+                "worktrees holding ignored local files. For merged branches: "
+                "vc-git branches cleanup [--also-remote]."
+            ),
+        )
+    else:
+        # The commands are dispatched before this parser exists, so argparse
+        # cannot list them itself; without this block they read as absent.
+        parser = argparse.ArgumentParser(
+            prog="vc-git",
+            usage=(
+                "%(prog)s [-h] [--json] [--version] "
+                "[--compare DISPATCH_RUN_ID --cuts LEFT RIGHT] [project]\n"
+                "       %(prog)s {landed,gems,save,worktrees,branches} ..."
+            ),
+            description="Show full Git context, including every worktree.",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog=(
+                "commands:\n"
+                "  landed ADDRESS...    did this work land? Compares content, so squash\n"
+                "                       merges, cherry-picks and plain copies count\n"
+                "  gems [search QUERY]  unlanded work worth keeping, copies first\n"
+                "  save [ADDRESS] --to patch|git-apply|commit|stash\n"
+                "                       keep work without touching it\n"
+                "  worktrees [list|triage|cleanup]\n"
+                "                       every worktree; cleanup removes only committed work\n"
+                "  branches cleanup     remove branches whose commits are all in the target\n"
+                "\n"
+                'Run "vc-git COMMAND --help" for the options of one command, '
+                'for example "vc-git worktrees --help".'
+            ),
+        )
     if worktrees_command:
         parser.add_argument(
             "action",

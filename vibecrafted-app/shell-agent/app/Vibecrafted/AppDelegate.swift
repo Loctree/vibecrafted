@@ -1666,21 +1666,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
       throw PreferenceConflictError(envelope: envelope)
     }
     guard clean, terminationStatus == 0 else {
-      // A refusal ends with one human sentence on stderr, and that sentence is
-      // shown exactly as the installer wrote it — it is the admission owner's
-      // verdict, not material for this App to rephrase. Only a run that never
-      // reached a verdict (killed, timed out, or silent) is described here,
-      // with interpreter frames reduced to the owner's actual message.
-      let diagnostic = boundedResolverDiagnostic(
-        stdout: stdout, stderr: stderr, limit: 480)
-      let detail: String
-      if timedOut {
-        detail = "the Runtime Pack installer timed out; its durable transaction will recover or report its lease state\(diagnostic)"
-      } else if clean, let refusal = installerRefusalLine(stderr: stderr) {
-        detail = refusal
-      } else {
-        detail = "the Runtime Pack installer exited \(terminationStatus)\(diagnostic)"
-      }
+      let detail = runtimePackInstallerFailureDetail(
+        stdout: stdout, stderr: stderr, terminationStatus: terminationStatus,
+        clean: clean, timedOut: timedOut)
       throw NSError(
         domain: "io.vetcoders.vibecrafted.install",
         code: Int(terminationStatus),
@@ -2348,10 +2336,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, Comman
         }
         // The installer's own last line, verbatim. A refused publication
         // touched no prior runtime, so nothing this App holds is changed here.
+        // An owner refusing this App's older carrier is a fact, not a crash:
+        // it reads calm and names the one move that helps.
+        let refusal = runtimeReinstallFailurePresentation(error.localizedDescription)
         let failure = NSAlert()
-        failure.alertStyle = .critical
-        failure.messageText = presentation.failureTitle
-        failure.informativeText = error.localizedDescription
+        failure.alertStyle = refusal.critical ? .critical : .warning
+        failure.messageText = refusal.critical ? presentation.failureTitle : refusal.title
+        failure.informativeText = refusal.detail
         failure.addButton(withTitle: "OK")
         failure.runModal()
       case .success(let install):
