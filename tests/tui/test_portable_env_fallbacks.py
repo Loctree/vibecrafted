@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from vibecrafted_core.external_products import FRAME_MIN
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FOUNDATIONS_SCRIPT = REPO_ROOT / "scripts" / "install-foundations.sh"
 BASE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
@@ -73,10 +75,19 @@ def test_install_foundations_default_treats_agent_cli_bootstrap_as_best_effort(
         # subject: the best-effort agents leg.
         "aicx",
         "aicx-mcp",
-        "vc-frame",
         "node",
     ):
         _write_fake_command(fake_bin, command)
+    # The S2 resolver admits a PATH vc-frame by its --version. Off macOS that
+    # is the whole proof, so a compatible fake keeps this test off the network
+    # (macOS also demands the Developer ID signature a fake cannot carry).
+    _write_fake_command(
+        fake_bin,
+        "vc-frame",
+        "#!/usr/bin/env bash\n"
+        f'[[ "${{1:-}}" == "--version" ]] && echo "vc-frame {".".join(map(str, FRAME_MIN))}"\n'
+        "exit 0\n",
+    )
     _write_fake_command(
         fake_bin,
         "npm",

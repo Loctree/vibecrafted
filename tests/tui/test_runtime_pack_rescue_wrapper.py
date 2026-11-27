@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from _runtime_pack_fixture import (
     fixed_terminal_fixture,
+    fixture_pack_platform,
     private_child_command,
     private_runtime_pack_seed,
     seed_runtime_pack,
@@ -153,10 +154,16 @@ def _wrapper_env(
         encoding="utf-8",
     )
     uname.chmod(0o755)
+    # Only a Darwin host is presented as Darwin/arm64 (an Intel runner too),
+    # because only there is the fixture sealed darwin-arm64. A Linux host
+    # keeps its real uname, which matches its linux-* seal.
+    search_path = os.environ.get("PATH", "")
+    if sys.platform == "darwin":
+        search_path = f"{uname_dir}{os.pathsep}{search_path}"
     env = {
         **os.environ,
         "TMPDIR": str(wrapper_tmp),
-        "PATH": f"{uname_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "PATH": search_path,
         "VIBECRAFTED_RUNTIME_PACK_PUBLIC_KEY": str(public_key),
     }
     if extra:
@@ -165,13 +172,16 @@ def _wrapper_env(
 
 
 def _wrapper_flags(version: str) -> list[str]:
+    # The admission seal declares the host's own pack target; the wrapper must
+    # expect that same target or it refuses the pack as foreign.
+    pack_platform, pack_architecture = fixture_pack_platform()
     return [
         "--expected-version",
         version,
         "--expected-platform",
-        "darwin-arm64",
+        pack_platform,
         "--expected-architecture",
-        "arm64",
+        pack_architecture,
     ]
 
 
@@ -732,12 +742,7 @@ def test_public_wrapper_apply_refuses_changed_archive(
         "--apply",
         "--plan-digest",
         plan["plan_digest"],
-        "--expected-version",
-        "9.9.9+b",
-        "--expected-platform",
-        "darwin-arm64",
-        "--expected-architecture",
-        "arm64",
+        *_wrapper_flags("9.9.9+b"),
         env=env,
     )
     assert applied.returncode == 2, (applied.stdout, applied.stderr)
