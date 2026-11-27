@@ -190,8 +190,11 @@ def test_install_linux_workflow_publishes_x64_and_keeps_arm64_optional():
     assert "genpkey -algorithm RSA" in text
     assert "genpkey -algorithm ED25519" not in text
     assert "openssl pkeyutl -sign -rawin" not in text
-    installer = Path(__file__).resolve().parents[2] / "install.sh"
-    assert (
-        "No prebuilt Runtime Pack available for $channel_platform on channel $ref"
-        in installer.read_text(encoding="utf-8")
+    installer = (Path(__file__).resolve().parents[2] / "install.sh").read_text(
+        encoding="utf-8"
     )
+    # One refusal helper owns the copy; the channel path names its platform.
+    assert (
+        "No prebuilt Runtime Pack available for $platform on channel $ref" in installer
+    )
+    assert 'runtime_pack_unavailable_message "$channel_platform"' in installer

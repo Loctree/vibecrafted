@@ -82,8 +82,10 @@ def test_bundle_uninstall_removes_owned_payload_and_printed_restore_works(
     assert not payload.exists()
     assert not stale_payload.exists()
     assert not incoming.exists()
-    assert unrelated.is_dir()
-    assert (runtime_bin / "vc-frame").is_file()
+    # Everything under an owned root leaves with the product but goes into the
+    # external restore kit first (2930f8f9): nothing there is lost, it is moved.
+    assert not unrelated.exists()
+    assert not (runtime_bin / "vc-frame").exists()
     assert uv_tool.is_dir()
     assert not launcher.exists()
     assert not helper.exists()
@@ -105,7 +107,9 @@ def test_bundle_uninstall_removes_owned_payload_and_printed_restore_works(
     restore_manifest = json.loads(
         (restore_script.parent / "restore-manifest.json").read_text(encoding="utf-8")
     )
-    assert any(Path(item["path"]) == payload for item in restore_manifest["items"])
+    kit = {Path(item["path"]) for item in restore_manifest["items"]}
+    assert {payload, unrelated, runtime_bin / "vc-frame"} <= kit
+    assert uv_tool not in kit
 
     assert installer.cmd_uninstall(Namespace(dry_run=False)) == 0
     second_output = capsys.readouterr().out
@@ -123,6 +127,7 @@ def test_bundle_uninstall_removes_owned_payload_and_printed_restore_works(
     assert helper.is_file()
     assert installer._launcher_path_line() in zshrc.read_text(encoding="utf-8")
     assert unrelated.is_dir()
+    assert (runtime_bin / "vc-frame").is_file()
 
 
 def test_uninstall_never_recurses_through_current_link_into_checkout(

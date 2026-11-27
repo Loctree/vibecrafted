@@ -16649,22 +16649,21 @@ def _build_uninstall_inventory(
 
     runtime_bin = vibecrafted_runtime_bin()
     if runtime_bin.is_dir():
-        children = sorted(runtime_bin.iterdir(), key=lambda item: item.name)
-        if children:
-            for child in children:
-                add(
-                    "runtime-bin",
-                    child,
-                    "remove",
-                    "Vibecrafted runtime binary; included in the external restore kit",
-                )
-        else:
+        for child in sorted(runtime_bin.iterdir(), key=lambda item: item.name):
             add(
                 "runtime-bin",
-                runtime_bin,
-                "remove-if-empty",
-                "empty runtime binary root",
+                child,
+                "remove",
+                "Vibecrafted runtime binary; included in the external restore kit",
             )
+        # Like the tools root: the directory goes in the same teardown as its
+        # binaries, so a second uninstall finds nothing left to do.
+        add(
+            "runtime-bin",
+            runtime_bin,
+            "remove-if-empty",
+            "runtime binary root, removed once its backed-up binaries are gone",
+        )
 
     runtime_home = vibecrafted_runtime_home()
     if runtime_home.is_dir():
