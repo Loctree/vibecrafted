@@ -201,16 +201,28 @@ case "caret":
   emit(excerpt)
   emit(isTracebackCaret("          ^^^^^") ? "caret" : "kept")
 case "downgrade-refusal":
-  let excerpt = boundedResolverDiagnostic(stdout: Data(), stderr: downgradeRefusal, limit: 480)
-  emit(excerpt)
-  let refused = runtimeReinstallFailurePresentation(
-    "the Runtime Pack installer exited 1" + excerpt)
+  // The real reinstall path: a clean exit 1 whose stderr is the traceback.
+  let failure = runtimePackInstallerFailureDetail(
+    stdout: Data(), stderr: downgradeRefusal, terminationStatus: 1, clean: true,
+    timedOut: false)
+  emit(failure)
+  let refused = runtimeReinstallFailurePresentation(failure)
   emit(refused.title)
   emit(refused.critical ? "critical" : "calm")
   emit(refused.detail.replacingOccurrences(of: "\n", with: " | "))
   let other = runtimeReinstallFailurePresentation("the Runtime Pack installer exited 1: disk full")
   emit(other.title)
   emit(other.critical ? "critical" : "calm")
+case "written-refusal":
+  let written = """
+Checking the Runtime Pack signature
+  carrier 4.6.0+gaaaaaaaa
+vc-terminal requires macOS; omit this target on linux. Resolve this refusal and retry Upgrade.
+""".data(using: .utf8)!
+  emit(runtimePackInstallerFailureDetail(
+    stdout: Data(), stderr: written, terminationStatus: 1, clean: true, timedOut: false))
+  emit(runtimePackInstallerFailureDetail(
+    stdout: Data(), stderr: written, terminationStatus: 9, clean: false, timedOut: false))
 case "preference-conflict":
   let decoded = decodePreferenceConflict(from: preferenceConflict)!
   emit(preferenceConflictSummary(decoded))
@@ -374,8 +386,10 @@ def test_an_older_carrier_refusal_reads_as_a_fact_not_as_a_crash(
     excerpt, title, tone, detail, other_title, other_tone = _run(
         policy_binary, "downgrade-refusal"
     )
+    # excerpt is what runtimePackInstallerResult throws for this clean exit 1.
     for leak in ("payload_root", "allow_older=", "lines>", "raise ", "Traceback"):
         assert leak not in excerpt
+    assert excerpt.startswith("the Runtime Pack installer exited 1: ")
     assert "refusing to replace a newer active runtime" in excerpt
     assert "was built 20261108" in excerpt
     assert title == "This App is older than the installed runtime"
@@ -385,6 +399,19 @@ def test_an_older_carrier_refusal_reads_as_a_fact_not_as_a_crash(
     assert "Install a newer Vibecrafted App" in detail
     assert other_title == "Vibecrafted could not reinstall its runtime"
     assert other_tone == "critical"
+
+
+def test_a_refusal_the_installer_writes_is_shown_as_written(
+    policy_binary: Path,
+) -> None:
+    """Only a run that never reached a verdict is described by the App."""
+    written, killed = _run(policy_binary, "written-refusal")
+    assert written == (
+        "vc-terminal requires macOS; omit this target on linux. "
+        "Resolve this refusal and retry Upgrade."
+    )
+    assert killed.startswith("the Runtime Pack installer exited 9: ")
+    assert "Resolve this refusal and retry Upgrade." in killed
 
 
 def test_preference_conflict_names_settings_and_keeps_a_bound_choice(

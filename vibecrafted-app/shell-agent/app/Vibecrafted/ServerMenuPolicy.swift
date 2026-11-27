@@ -599,6 +599,31 @@ func installerRefusalLine(stderr: Data) -> String? {
     .last(where: { !$0.isEmpty })
 }
 
+/// What a failed Runtime Pack installer run is reported as.
+///
+/// A refusal the installer writes itself ends with one human sentence, shown
+/// exactly as written: it is the admission owner's verdict, not material for
+/// this App to rephrase. A refusal raised as an exception (the downgrade
+/// refusal is one) carries its verdict in a message of several lines, with the
+/// facts after the first, so its last line is only the last fact. That message
+/// is kept whole, frames removed. A run that never reached a verdict (killed,
+/// timed out or silent) is described here.
+func runtimePackInstallerFailureDetail(
+  stdout: Data, stderr: Data, terminationStatus: Int32, clean: Bool, timedOut: Bool
+) -> String {
+  let diagnostic = boundedResolverDiagnostic(stdout: stdout, stderr: stderr, limit: 480)
+  if timedOut {
+    return
+      "the Runtime Pack installer timed out; its durable transaction will recover or report its lease state\(diagnostic)"
+  }
+  let raised = String(data: stderr, encoding: .utf8)?
+    .contains("Traceback (most recent call last):") ?? false
+  if clean, !raised, let refusal = installerRefusalLine(stderr: stderr) {
+    return refusal
+  }
+  return "the Runtime Pack installer exited \(terminationStatus)\(diagnostic)"
+}
+
 /// `vibecrafted.runtime-resolution.v1`. Unknown keys are ignored on purpose —
 /// a newer owner may report more without invalidating this read.
 struct RuntimeResolutionEnvelope<Runtime: Decodable>: Decodable {
