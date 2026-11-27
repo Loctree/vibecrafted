@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Payload modes are product bytes, not the caller's umask (CI signs under
+# umask 077); package-runtime-pack.sh copies them into the carrier as is.
+umask 022
 
 die() { printf 'Linux Runtime Pack build failed: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }

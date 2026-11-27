@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# The carrier's modes are product bytes, not the caller's umask: CI runs this
+# under umask 077 for its key files, and cp -R would strip group/other read.
+umask 022
 
 die() { printf 'Runtime Pack packaging failed: %s\n' "$*" >&2; exit 1; }
 

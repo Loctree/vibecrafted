@@ -1036,11 +1036,21 @@ def test_runtime_packager_emits_one_closed_root_and_checksum(tmp_path: Path) -> 
         capture_output=True,
         text=True,
         check=False,
+        # CI builds the pack inside a step that sets umask 077 for its key
+        # files. The carrier's modes must not depend on the caller's umask.
+        preexec_fn=lambda: os.umask(0o077),
     )
 
     assert result.returncode == 0, result.stderr
     with tarfile.open(output, "r:gz") as archive:
         members = archive.getmembers()
+        modes = {member.name: member.mode & 0o7777 for member in members}
+        assert modes["VibecraftedRuntime/source-provenance.json"] == 0o644
+        assert modes["VibecraftedRuntime/bin/voc"] == 0o755
+        assert all(modes[member.name] == 0o755 for member in members if member.isdir())
+        assert all(
+            modes[member.name] in {0o644, 0o755} for member in members if member.isreg()
+        )
         assert all(
             not any("xattr" in key.lower() for key in member.pax_headers)
             for member in members
