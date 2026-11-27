@@ -85,6 +85,19 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _installer_with_linux_distro(tmp_path: Path, distro_id: str) -> Path:
+    os_release = tmp_path / "os-release"
+    os_release.write_text(f"ID={distro_id}\n", encoding="utf-8")
+    installer = tmp_path / "install.sh"
+    installer.write_text(
+        INSTALL_SH.read_text(encoding="utf-8").replace(
+            "/etc/os-release", shlex.quote(str(os_release))
+        ),
+        encoding="utf-8",
+    )
+    return installer
+
+
 def _materialize_complete_distribution_fixture(source_dir: Path) -> None:
     for relative in sorted(FIXTURE_REQUIRED_FILES | FIXTURE_REQUIRED_SURFACES):
         path = source_dir / relative
@@ -638,6 +651,217 @@ def test_missing_runtime_dependency_is_named_before_the_channel_manifest_is_fetc
     assert "hint:" in result.stderr
     assert "Channel manifest" not in result.stdout + result.stderr
     assert not capture.exists(), "network was touched before the tool preflight"
+    assert "Download and verify" not in result.stdout + result.stderr
+
+
+def test_channel_preflight_reports_every_missing_tool_in_one_pass(
+    tmp_path: Path,
+) -> None:
+    missing_tools = ["curl", "python3", "file"]
+    tool_bin = tmp_path / "tools-bin"
+    home = tmp_path / "home"
+    tool_bin.mkdir()
+    home.mkdir()
+    baseline = {
+        "uname",
+        "dirname",
+        "grep",
+        "tar",
+        "openssl",
+        "python3",
+        "file",
+        "curl",
+        "awk",
+        "mkdir",
+        "stat",
+        "chmod",
+        "mktemp",
+        "head",
+        "date",
+        "rm",
+    }
+    for tool in baseline - set(missing_tools):
+        resolved = (
+            sys.executable
+            if tool == "python3"
+            else shutil.which(tool, path="/usr/bin:/bin:/usr/sbin:/sbin")
+        )
+        if resolved is not None:
+            (tool_bin / tool).symlink_to(resolved)
+    (tool_bin / "uname").unlink(missing_ok=True)
+    _write_executable(
+        tool_bin / "uname",
+        '#!/bin/sh\nprintf "Linux\\n"\n',
+    )
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["XDG_CONFIG_HOME"] = str(home / ".config")
+    env["VIBECRAFTED_HOME"] = str(home / ".vibecrafted")
+    env["PATH"] = str(tool_bin)
+
+    result = subprocess.run(
+        ["/bin/bash", str(INSTALL_SH), "--yes"],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    missing_line = next(
+        line
+        for line in result.stderr.splitlines()
+        if line.startswith("Error: missing required tools:")
+    )
+    reported = set(missing_line.removeprefix("Error: missing required tools:").split())
+    assert reported == set(missing_tools)
+    assert "hint:" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("distro_id", "hint"),
+    [
+        (
+            "ubuntu",
+            "hint: sudo apt-get update && sudo apt-get install -y file build-essential",
+        ),
+        ("unknown", "hint: install file make via your distro package manager"),
+    ],
+)
+def test_source_carrier_preflight_reports_file_and_make_together(
+    tmp_path: Path,
+    distro_id: str,
+    hint: str,
+) -> None:
+    missing_tools = ["file", "make"]
+    source_dir = tmp_path / "source"
+    archive_path = tmp_path / "vibecrafted-bootstrap.tar.gz"
+    fake_bin = tmp_path / "bin"
+    home = tmp_path / "home"
+    source_dir.mkdir()
+    fake_bin.mkdir()
+    home.mkdir()
+    (source_dir / "Makefile").write_text("install:\n\t@echo ok\n", encoding="utf-8")
+    _write_distribution_manifest_stub(source_dir)
+    _write_v2_archive(source_dir, archive_path, "vibecrafted-main")
+    baseline = {
+        "uname",
+        "dirname",
+        "grep",
+        "tar",
+        "openssl",
+        "python3",
+        "file",
+        "awk",
+        "mkdir",
+        "stat",
+        "chmod",
+        "mktemp",
+        "head",
+        "date",
+        "rm",
+    }
+    for tool in baseline - set(missing_tools):
+        resolved = (
+            sys.executable
+            if tool == "python3"
+            else shutil.which(tool, path="/usr/bin:/bin:/usr/sbin:/sbin")
+        )
+        if resolved is not None:
+            (fake_bin / tool).symlink_to(resolved)
+    (fake_bin / "uname").unlink(missing_ok=True)
+    _write_executable(
+        fake_bin / "uname",
+        '#!/bin/sh\ncase "$1" in -m) echo x86_64 ;; *) echo Linux ;; esac\n',
+    )
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["XDG_CONFIG_HOME"] = str(home / ".config")
+    env["VIBECRAFTED_HOME"] = str(home / ".vibecrafted")
+    env["PATH"] = str(fake_bin)
+
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            str(_installer_with_linux_distro(tmp_path, distro_id)),
+            "--yes",
+            "--archive-file",
+            str(archive_path),
+            "install",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    missing_line = next(
+        line
+        for line in result.stderr.splitlines()
+        if line.startswith("Error: missing required tools:")
+    )
+    reported = set(missing_line.removeprefix("Error: missing required tools:").split())
+    assert reported == set(missing_tools)
+    assert hint in result.stderr
+
+
+def test_archive_file_route_refuses_without_make_before_download(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    archive_path = tmp_path / "vibecrafted-bootstrap.tar.gz"
+    fake_bin = tmp_path / "bin"
+    home = tmp_path / "home"
+    capture = tmp_path / "curl-urls.txt"
+    source_dir.mkdir()
+    fake_bin.mkdir()
+    home.mkdir()
+    (source_dir / "Makefile").write_text("install:\n\t@echo ok\n", encoding="utf-8")
+    _write_distribution_manifest_stub(source_dir)
+    _write_v2_archive(source_dir, archive_path, "vibecrafted-main")
+    for tool in ("uname", "tar", "openssl", "file", "python3", "curl"):
+        resolved = shutil.which(tool, path="/usr/bin:/bin:/usr/sbin:/sbin")
+        if resolved:
+            (fake_bin / tool).symlink_to(resolved)
+    (fake_bin / "uname").unlink(missing_ok=True)
+    _write_executable(
+        fake_bin / "uname",
+        '#!/bin/sh\ncase "$1" in -m) echo x86_64 ;; *) echo Linux ;; esac\n',
+    )
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["XDG_CONFIG_HOME"] = str(home / ".config")
+    env["VIBECRAFTED_HOME"] = str(home / ".vibecrafted")
+    for tool in ("dirname", "grep", "awk", "mkdir", "stat", "chmod", "mktemp", "head", "date", "rm"):
+        resolved = shutil.which(tool, path="/usr/bin:/bin:/usr/sbin:/sbin")
+        if resolved:
+            (fake_bin / tool).symlink_to(resolved)
+    env["PATH"] = str(fake_bin)
+    env["CURL_CAPTURE"] = str(capture)
+
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            str(_installer_with_linux_distro(tmp_path, "ubuntu")),
+            "--yes",
+            "--archive-file",
+            str(archive_path),
+            "install",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "missing required tools: make" in result.stderr
+    assert "build-essential" in result.stderr
+    assert not capture.exists(), "archive preflight must refuse before any download"
 
 
 def _portable_copy(tmp_path: Path, stage_marker: Path) -> Path:

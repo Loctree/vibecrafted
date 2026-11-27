@@ -20,14 +20,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def test_missing_linux_pack_die_names_source_carrier_route() -> None:
     text = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
-    needle = "No prebuilt Runtime Pack available for $channel_platform on channel $ref"
-    matches = [line for line in text.splitlines() if needle in line]
-    assert len(matches) == 1
-    line = matches[0]
-    assert "--archive-file" in line
-    assert "portable source copy" in line
-    assert "still needs make" in line
-    assert "compiler" not in line
+    assert "runtime_pack_unavailable_message()" in text
+    assert "--archive-file" in text.split("runtime_pack_unavailable_message()", 1)[1]
+    assert "portable" in text.split("runtime_pack_unavailable_message()", 1)[1]
+    assert "needs make" in text.split("runtime_pack_unavailable_message()", 1)[1]
+    assert "runtime_pack_unavailable_message" in text
+    assert "compiler" not in text.split("runtime_pack_unavailable_message()", 1)[0]
+    assert "does not build a Runtime Pack on your machine" in text
 
 
 @pytest.mark.parametrize("failure", ["fetch", "merge"])
