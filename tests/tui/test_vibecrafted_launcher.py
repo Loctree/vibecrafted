@@ -16,11 +16,19 @@ import time
 from pathlib import Path
 
 import pytest
+from _generation_local_host import present_generation_local_host
 from _runtime_pack_fixture import private_child_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "vibecrafted"
 PACKAGED_LAUNCHER = REPO_ROOT / "vibecrafted-core/vibecrafted_core/deck/vibecrafted"
+
+
+@pytest.fixture(autouse=True)
+def _generation_local_host(tmp_path, monkeypatch):
+    # The fixture generations carry their engines under libexec, the
+    # generation-local contract; see tests/_generation_local_host.py.
+    present_generation_local_host(monkeypatch, tmp_path)
 
 
 def _private_init_command(

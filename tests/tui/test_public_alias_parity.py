@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from _generation_local_host import present_generation_local_host
 from vibecrafted_core import cli
 from vibecrafted_core.runtime_paths import version_is_stamped
 
@@ -56,6 +57,13 @@ SINGLE_STAGE_ALIASES = (
     "intents",
     "ownership",
 )
+
+
+@pytest.fixture(autouse=True)
+def _generation_local_host(tmp_path, monkeypatch):
+    # The fixture generations carry their engines under libexec, the
+    # generation-local contract; see tests/_generation_local_host.py.
+    present_generation_local_host(monkeypatch, tmp_path)
 
 
 @pytest.fixture
