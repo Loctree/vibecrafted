@@ -85,6 +85,19 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+def _installer_with_linux_distro(tmp_path: Path, distro_id: str) -> Path:
+    os_release = tmp_path / "os-release"
+    os_release.write_text(f"ID={distro_id}\n", encoding="utf-8")
+    installer = tmp_path / "install.sh"
+    installer.write_text(
+        INSTALL_SH.read_text(encoding="utf-8").replace(
+            "/etc/os-release", shlex.quote(str(os_release))
+        ),
+        encoding="utf-8",
+    )
+    return installer
+
+
 def _materialize_complete_distribution_fixture(source_dir: Path) -> None:
     for relative in sorted(FIXTURE_REQUIRED_FILES | FIXTURE_REQUIRED_SURFACES):
         path = source_dir / relative
@@ -706,8 +719,20 @@ def test_channel_preflight_reports_every_missing_tool_in_one_pass(
     assert "hint:" in result.stderr
 
 
+@pytest.mark.parametrize(
+    ("distro_id", "hint"),
+    [
+        (
+            "ubuntu",
+            "hint: sudo apt-get update && sudo apt-get install -y file build-essential",
+        ),
+        ("unknown", "hint: install file make via your distro package manager"),
+    ],
+)
 def test_source_carrier_preflight_reports_file_and_make_together(
     tmp_path: Path,
+    distro_id: str,
+    hint: str,
 ) -> None:
     missing_tools = ["file", "make"]
     source_dir = tmp_path / "source"
@@ -759,7 +784,7 @@ def test_source_carrier_preflight_reports_file_and_make_together(
     result = subprocess.run(
         [
             "/bin/bash",
-            str(INSTALL_SH),
+            str(_installer_with_linux_distro(tmp_path, distro_id)),
             "--yes",
             "--archive-file",
             str(archive_path),
@@ -780,8 +805,7 @@ def test_source_carrier_preflight_reports_file_and_make_together(
     )
     reported = set(missing_line.removeprefix("Error: missing required tools:").split())
     assert reported == set(missing_tools)
-    assert "build-essential" in result.stderr
-    assert "file" in result.stderr
+    assert hint in result.stderr
 
 
 def test_archive_file_route_refuses_without_make_before_download(
@@ -821,7 +845,7 @@ def test_archive_file_route_refuses_without_make_before_download(
     result = subprocess.run(
         [
             "/bin/bash",
-            str(INSTALL_SH),
+            str(_installer_with_linux_distro(tmp_path, "ubuntu")),
             "--yes",
             "--archive-file",
             str(archive_path),

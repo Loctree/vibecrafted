@@ -567,20 +567,18 @@ detect_linux_distro() {
 # Map CLI tool names to distro package names where they diverge (Debian's
 # `make` lives in build-essential, not a standalone `make` on minimal images).
 preflight_pkg_names() {
-  local tool pkg duplicate existing
-  local -a tools=() seen=()
+  local tool pkg packages=""
   for tool in "$@"; do
     pkg="$tool"
     case "$LINUX_PKG_MGR:$tool" in
       apt:make) pkg=build-essential ;;
     esac
-    duplicate=0
-    for existing in "${seen[@]}"; do
-      [[ "$existing" == "$pkg" ]] && duplicate=1 && break
-    done
-    [[ "$duplicate" == "1" ]] || { seen+=("$pkg"); tools+=("$pkg"); }
+    case " $packages " in
+      *" $pkg "*) ;;
+      *) packages="${packages:+$packages }$pkg" ;;
+    esac
   done
-  (IFS=' '; printf '%s' "${tools[*]}")
+  printf '%s' "$packages"
 }
 
 # preflight_pkg_hint emits a copy-pasteable install command for the named
