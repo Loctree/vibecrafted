@@ -25,7 +25,7 @@ for line in sys.stdin:
     request_id = message['id']
     method = message['method']
     if method == 'thread/fork':
-        assert message['params'] == {'threadId': os.environ['PARENT'], 'cwd': os.getcwd(), 'model': 'exact-model', 'sandbox': 'workspace-write', 'approvalPolicy': 'on-request'}
+        assert message['params'] == {'threadId': os.environ['PARENT'], 'cwd': os.getcwd(), 'model': 'exact-model', 'sandbox': 'workspace-write', 'approvalPolicy': 'on-request', 'excludeTurns': True}
     if method == 'initialize': result = {}
     else:
         if mode == 'absent': continue
@@ -114,6 +114,7 @@ def test_unix_remote_ack_uses_selected_endpoint(tmp_path):
                     "model": "exact-model",
                     "sandbox": "read-only",
                     "approvalPolicy": "never",
+                    "excludeTurns": True,
                 }
             result = (
                 {}

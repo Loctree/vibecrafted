@@ -55,6 +55,7 @@ from .execution_controls import (
 from .failure_attribution import attribute_failure
 from .local_skills import LocalSkillError, resolve_execution_skill
 from .model_overrides import _with_model_override
+from .prompt_transport import print_limit_flags
 from .report_contract import (
     CLAIM_DIGEST_ENV,
     materialize_launcher_report_template,
@@ -75,6 +76,7 @@ from .settlement import BareMarkdownError, require_bound_markdown
 from .telemetry import (
     build_run_telemetry,
     coerce_exit_code,
+    is_model_name,
     parent_session_ids,
     usage_record,
 )
@@ -1943,6 +1945,24 @@ def interactive_launch_interpreter(
     return sys.executable, False
 
 
+def _refuse_unscoped_interactive_continuation(
+    provider: str,
+    native_id: str,
+    *,
+    binding: Mapping[str, Any],
+) -> None:
+    parent = dict(binding)
+    if "mcp_isolation" not in parent and not parent.get("mcp_config") and native_id:
+        from .workflow import _continuation_parent
+
+        parent = _continuation_parent(provider, native_id, binding=parent)
+    if "mcp_isolation" in parent or parent.get("mcp_config"):
+        raise ValueError(
+            "strict MCP continuations require --prompt or --file; "
+            "bare interactive resume/fork cannot preserve the admitted MCP scope"
+        )
+
+
 def interactive_workspace_command(
     provider: str,
     prompt: str,
@@ -2150,6 +2170,20 @@ def interactive_workspace_command(
             "selection_root": str(Path(root).resolve()),
         }
         base = ""  # validate current checkout without changing historical baseline
+    if native_session or continuity_policy.mode in {"bare-fork", "full-lineage"}:
+        continuation_binding: dict[str, Any] = {
+            "session_selection": session_selection or {}
+        }
+        source_run = resume_run_id or (
+            parent_run_id if not (session_selection or {}).get("source_run_id") else ""
+        )
+        if source_run:
+            continuation_binding["parent_run_id"] = source_run
+        _refuse_unscoped_interactive_continuation(
+            provider,
+            native_session or continuity_policy.parent_provider_session_id,
+            binding=continuation_binding,
+        )
     # local-native selects the host environment, not a checkout substrate.
     # Leave its omitted selector empty so --worktree can select the substrate.
     execution = execution_runtime
@@ -2746,13 +2780,15 @@ class _ClaudeTranscriptUsage:
     @staticmethod
     def _inherited_digest(event: dict[str, Any], *, include_usage: bool = False) -> str:
         # Claude rewrites sessionId/slug/parentUuid and may recompute historical
-        # usage. UUID + immutable message content/version/cwd prove inheritance.
+        # usage. A fork also stamps the copied history with the fork's own cwd,
+        # so a parent that worked in another repository arrives with a different
+        # cwd. UUID + immutable message content/type/version prove inheritance.
         message = {
             key: value
             for key, value in event["message"].items()
             if include_usage or key != "usage"
         }
-        payload = {key: event.get(key) for key in ("uuid", "type", "version", "cwd")}
+        payload = {key: event.get(key) for key in ("uuid", "type", "version")}
         payload["message"] = message
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -2942,6 +2978,28 @@ def launch_interactive_workspace(
     from .workflow import reserve_run_id
 
     admission = dict(admission or {})
+    if (
+        "mcp_isolation" in admission
+        or admission.get("mcp_config")
+        or admission.get("skill") in {"resume", "fork"}
+        or continuity != "fresh"
+    ):
+        continuation_binding = {
+            key: admission[key]
+            for key in ("mcp_isolation", "mcp_config", "session_selection")
+            if key in admission
+        }
+        if (
+            admission.get("skill") == "resume"
+            and admission.get("parent_run_id")
+            and not admission.get("session_selection")
+        ):
+            continuation_binding["parent_run_id"] = admission["parent_run_id"]
+        _refuse_unscoped_interactive_continuation(
+            provider,
+            str(parent_session_id or admission.get("agent_session_id") or ""),
+            binding=continuation_binding,
+        )
     controls = controls_from_receipt(admission.get("execution_controls") or {})
     if controls is None:
         from .server_config import durable_permission_selection
@@ -5257,25 +5315,23 @@ FOOTER_TOKEN_PATTERNS = {
         r"^\s*tokens_output:\s*([0-9]+)", re.IGNORECASE | re.MULTILINE
     ),
 }
-JSON_TOKEN_PATTERNS = {
-    "input": re.compile(r'"(?:input_tokens|inputTokens|prompt_tokens)"\s*:\s*([0-9]+)'),
-    "cached_input": re.compile(
-        r'"(?:cached_input_tokens|cached_prompt_tokens|cache_read_input_tokens|cacheReadInputTokens|cacheInputTokens)"\s*:\s*([0-9]+)'
+# Same key sets the old whole-text regex read. Counts now come from parsed
+# JSON objects (_collect_structured_tokens), not from a scan of the transcript.
+_JSON_TOKEN_KEYS: dict[str, tuple[str, ...]] = {
+    "input": ("input_tokens", "inputTokens", "prompt_tokens"),
+    "cached_input": (
+        "cached_input_tokens",
+        "cached_prompt_tokens",
+        "cache_read_input_tokens",
+        "cacheReadInputTokens",
+        "cacheInputTokens",
     ),
-    "cache_write": re.compile(
-        r'"(?:cache_creation_input_tokens|cacheCreateTokens)"\s*:\s*([0-9]+)'
-    ),
-    "output": re.compile(
-        r'"(?:output_tokens|outputTokens|completion_tokens)"\s*:\s*([0-9]+)'
-    ),
+    "cache_write": ("cache_creation_input_tokens", "cacheCreateTokens"),
+    "output": ("output_tokens", "outputTokens", "completion_tokens"),
 }
-COST_PATTERNS = (
-    re.compile(
-        r"cost(?:_usd)?['\"]?\s*[:=]\s*\$?([0-9]+(?:\.[0-9]+)?)",
-        re.IGNORECASE,
-    ),
-    re.compile(r"\$([0-9]+\.[0-9]+)\s*(?:usd)?", re.IGNORECASE),
-)
+_JSON_TOKEN_KEY_BUCKET = {
+    key: bucket for bucket, keys in _JSON_TOKEN_KEYS.items() for key in keys
+}
 MODEL_ENV_VARS = (
     "VIBECRAFTED_PARENT_MODEL",
     "CLAUDE_MODEL",
@@ -5284,7 +5340,48 @@ MODEL_ENV_VARS = (
     "GROK_MODEL",
     "OMP_MODEL",
 )
-MODEL_PLACEHOLDERS = {"", "none", "null", "unknown", "pending"}
+# Exact launcher frontmatter. A bare `model:` line is prose.
+_FRONTMATTER_MODEL_PATTERN = re.compile(
+    r"(?m)^---\nrunner:[ \t]*vibecrafted[ \t]*\nmodel:[ \t]*(.+?)[ \t]*$"
+)
+_TIMESTAMPED_MODEL_PATTERN = re.compile(
+    r"(?m)^[^\S\r\n]*\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]\s+model:[ \t]*([^\r\n]*)$",
+    re.IGNORECASE,
+)
+_MODEL_OBJECT_KEYS = ("model", "model_id", "modelId", "model_name", "modelName")
+# `cost_usd` is a total only when it is a JSON key. The YAML footer this
+# runtime writes (`cost_usd: 0.03`) is not a provider cost.
+_COST_TOTAL_KEYS = ("total_cost_usd", "totalCostUsd", "total_cost", "cost_usd")
+# A tool payload is the agent's own text. Nothing inside it is telemetry.
+# Same set as agent_stream._TOOL_PAYLOAD_KEYS; kept here so the two modules
+# do not import each other.
+_TOOL_PAYLOAD_KEYS = frozenset(
+    {
+        "input",
+        "arguments",
+        "args",
+        "parameters",
+        "tool_input",
+        "tool_call",
+        "toolCall",
+    }
+)
+_MODEL_USAGE_KEYS = frozenset({"modelUsage", "model_usage"})
+
+
+def _telemetry_descendants(key: str, value: object) -> tuple[dict[str, Any], ...]:
+    """Dicts under ``key`` that may still carry a model or a cost.
+
+    Walk dicts. Enter a list only under ``modelUsage`` / ``model_usage``.
+    Never enter a tool payload.
+    """
+    if key in _TOOL_PAYLOAD_KEYS:
+        return ()
+    if key in _MODEL_USAGE_KEYS and isinstance(value, list):
+        return tuple(item for item in value if isinstance(item, dict))
+    if isinstance(value, dict):
+        return (value,)
+    return ()
 
 
 @dataclass
@@ -5404,8 +5501,7 @@ def _default_command(
             *flags,
             "--add-dir",
             ".",
-            "--print-timeout",
-            "30m",
+            *print_limit_flags("agy"),
             "--print",
             prompt,
         ]
@@ -5518,8 +5614,7 @@ def _stdin_command(agent: str, controls: ExecutionControls | None = None) -> lis
             *flags,
             "--add-dir",
             ".",
-            "--print-timeout",
-            "30m",
+            *print_limit_flags("agy"),
             "--print=",
             "--input-format",
             "stream-json",
@@ -5720,17 +5815,19 @@ def _extract_session(text: str) -> str:
 def _extract_tokens(text: str) -> dict[str, int | None]:
     """Parse token usage from combined transcript/report text.
 
-    Prefers the authoritative run-closure footer, then JSON usage fields,
-    then per-event ``tokens: N in / N out`` lines, in that priority order.
-    ``events`` counts the provider usage evidence found; 0 means the text
-    carries none (a seeded ``tokens_input: 0`` template is not evidence).
+    Prefers the run-closure footer (``FOOTER_TOKEN_PATTERNS``), then numeric
+    counts on JSON-object lines, then per-event ``TOKEN_PATTERN`` lines
+    (``tokens: N in / N out``). JSON counts use the same key sets and the
+    same descent as ``_extract_cost``: a line counts only when it parses as
+    a JSON object, text inside strings is not read, tool payloads are not
+    entered, and a bool is not a count. ``events`` for that tier is the
+    larger of the input and output occurrences. A seeded ``tokens_input: 0``
+    footer is not evidence.
     """
     clean = _clean_text(text)
     found = TOKEN_PATTERN.findall(clean)
-    json_tokens = {
-        key: sum(int(match) for match in pattern.findall(clean))
-        for key, pattern in JSON_TOKEN_PATTERNS.items()
-    }
+    json_hits = _structured_token_hits(clean)
+    json_tokens = {key: sum(hits) for key, hits in json_hits.items()}
     # Prefer the authoritative run-closure footer totals when present: they are
     # written for every agent and carry the final per-run usage, so they work
     # uniformly across providers and never sum partial streaming deltas.
@@ -5768,10 +5865,7 @@ def _extract_tokens(text: str) -> dict[str, int | None]:
                 json_tokens["cached_input"],
                 json_tokens["output"],
             ),
-            "events": max(
-                len(JSON_TOKEN_PATTERNS["input"].findall(clean)),
-                len(JSON_TOKEN_PATTERNS["output"].findall(clean)),
-            ),
+            "events": max(len(json_hits["input"]), len(json_hits["output"])),
         }
     if not found:
         return {
@@ -5797,41 +5891,113 @@ def _extract_tokens(text: str) -> dict[str, int | None]:
     }
 
 
-def _extract_cost(text: str) -> float | None:
-    """Parse a USD cost from combined transcript/report text, preferring the footer."""
-    clean = _clean_text(text)
-    footer = re.findall(
-        r"^\s*cost_usd:\s*\$?([0-9]+(?:\.[0-9]+)?)\s*$",
-        clean,
-        re.IGNORECASE | re.MULTILINE,
-    )
-    if footer:
-        return round(float(footer[-1]), 6)
-    totals = re.findall(
-        r'"(?:total_cost_usd|totalCostUsd|total_cost)"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
-        clean,
-        re.IGNORECASE,
-    )
-    if totals:
-        return round(float(totals[-1]), 6)
-    item_costs = re.findall(r'"cost"\s*:\s*([0-9]+(?:\.[0-9]+)?)', clean, re.IGNORECASE)
-    if item_costs:
-        return round(sum(float(value) for value in item_costs), 6)
-    for pattern in COST_PATTERNS:
-        matches = pattern.findall(clean)
-        if not matches:
+def _is_number(value: object) -> bool:
+    """True for int/float. ``bool`` is an int subclass and is not a cost."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _json_object_line(line: str) -> dict[str, Any] | None:
+    """Parse one line that is a JSON object after ANSI and whitespace are stripped."""
+    text = ANSI_PATTERN.sub("", line).strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _json_token_count(value: object) -> int | None:
+    """One non-negative whole-number count. A bool is not a count."""
+    if not _is_number(value):
+        return None
+    number = float(value)
+    if not number.is_integer() or number < 0:
+        return None
+    return int(number)
+
+
+def _collect_structured_tokens(node: object, found: dict[str, list[int]]) -> None:
+    """Walk parsed JSON for token counts. Strings and tool payloads are closed.
+
+    Dicts are walked. A list is entered only under ``modelUsage`` /
+    ``model_usage``, the same descent ``_collect_structured_costs`` uses.
+    A token key contributes its number and is not entered.
+    """
+    if not isinstance(node, dict):
+        return
+    for key, value in node.items():
+        if key in _TOOL_PAYLOAD_KEYS:
             continue
-        try:
-            return round(float(matches[-1]), 6)
-        except ValueError:
-            pass
+        bucket = _JSON_TOKEN_KEY_BUCKET.get(key)
+        if bucket is not None:
+            count = _json_token_count(value)
+            if count is not None:
+                found[bucket].append(count)
+            continue
+        for child in _telemetry_descendants(key, value):
+            _collect_structured_tokens(child, found)
+
+
+def _structured_token_hits(text: str) -> dict[str, list[int]]:
+    """Token counts from lines that parse as JSON objects."""
+    found = {bucket: [] for bucket in _JSON_TOKEN_KEYS}
+    for raw_line in (text or "").splitlines():
+        parsed = _json_object_line(raw_line)
+        if parsed is None:
+            continue
+        _collect_structured_tokens(parsed, found)
+    return found
+
+
+def _collect_structured_costs(
+    node: object, totals: list[float], costs: list[float]
+) -> None:
+    """Walk parsed JSON. Never read text inside a string or a tool payload.
+
+    Dicts are walked. A list is entered only under modelUsage / model_usage.
+    """
+    if not isinstance(node, dict):
+        return
+    for key, value in node.items():
+        if key in _TOOL_PAYLOAD_KEYS:
+            continue
+        if key in _COST_TOTAL_KEYS and _is_number(value):
+            totals.append(float(value))
+        elif key == "cost" and _is_number(value):
+            costs.append(float(value))
+        for child in _telemetry_descendants(key, value):
+            _collect_structured_costs(child, totals, costs)
+
+
+def _extract_cost(text: str) -> float | None:
+    """USD from JSON-object lines only.
+
+    A line counts when, after stripping ANSI and whitespace, it starts with
+    ``{`` and parses as a JSON object. The last ``total_cost_usd`` /
+    ``totalCostUsd`` / ``total_cost`` / ``cost_usd`` wins. With no total, every
+    numeric ``cost`` is summed (Junie's per-call ``modelUsage``). A ``cost_usd:``
+    footer is not a provider cost: this runtime writes that footer itself.
+    """
+    totals: list[float] = []
+    costs: list[float] = []
+    for raw_line in (text or "").splitlines():
+        parsed = _json_object_line(raw_line)
+        if parsed is None:
+            continue
+        _collect_structured_costs(parsed, totals, costs)
+    if totals:
+        return round(totals[-1], 6)
+    if costs:
+        return round(sum(costs), 6)
     return None
 
 
 def _clean_model(value: object) -> str:
-    """Normalize a candidate model value; return "" for known placeholder strings."""
+    """Return a real model label, or "" when ``value`` is missing or not a model."""
     raw = str(value or "").strip()
-    return "" if raw.lower() in MODEL_PLACEHOLDERS else raw
+    return raw if is_model_name(raw) else ""
 
 
 def _fallback_model(agent: object) -> str:
@@ -5842,24 +6008,79 @@ def _fallback_model(agent: object) -> str:
     return f"{agent_name}-cli-default"
 
 
+def _collect_model_names(
+    node: object, fields: list[str], usage_keys: list[str]
+) -> None:
+    """Split model fields from modelUsage map keys. Strings are not parsed.
+
+    Tool payloads are not entered. A list is entered only under modelUsage.
+    A map contributes its first key, once. Fields stay in document order.
+    """
+    if not isinstance(node, dict):
+        return
+    for key, value in node.items():
+        if key in _TOOL_PAYLOAD_KEYS:
+            continue
+        if key in _MODEL_OBJECT_KEYS and isinstance(value, str):
+            model = _clean_model(value)
+            if model:
+                fields.append(model)
+        elif key in _MODEL_USAGE_KEYS and isinstance(value, dict) and value:
+            model = _clean_model(next(iter(value)))
+            if model:
+                usage_keys.append(model)
+        for child in _telemetry_descendants(key, value):
+            _collect_model_names(child, fields, usage_keys)
+
+
+def _match_inside_json_object(text: str, index: int) -> bool:
+    """True when ``index`` sits on a line that is itself a JSON object."""
+    line_start = text.rfind("\n", 0, index) + 1
+    line_end = text.find("\n", index)
+    if line_end < 0:
+        line_end = len(text)
+    return _json_object_line(text[line_start:line_end]) is not None
+
+
 def _extract_model_from_text(text: str) -> str:
-    """Find a model identifier in transcript/report text via footer, JSON, or usage-map fields."""
-    clean = _clean_text(text)
-    for match in reversed(re.findall(r"^model:\s*(.+?)\s*$", clean, re.MULTILINE)):
-        model = _clean_model(match)
+    """Model from one ordered set of sources. Position is not a rank.
+
+    The last valid frontmatter footer wins, wherever it stands. Otherwise the
+    last valid timestamped header. Otherwise the first valid model field of a
+    JSON event. Otherwise the first key of the last ``modelUsage`` map.
+    Bare ``model: X`` and a quoted ``"model"`` inside prose are not sources.
+    Text inside a JSON string or a tool payload is not read.
+    """
+    clean = _clean_text(text or "")
+    footer = ""
+    for match in _FRONTMATTER_MODEL_PATTERN.finditer(clean):
+        if _match_inside_json_object(clean, match.start()):
+            continue
+        model = _clean_model(match.group(1))
         if model:
-            return model
-    json_models = re.findall(
-        r'"(?:model|model_id|modelId|model_name|modelName)"\s*:\s*"([^"]+)"',
-        clean,
-    )
-    for match in json_models:
-        model = _clean_model(match)
+            footer = model
+    if footer:
+        return footer
+    header = ""
+    for match in _TIMESTAMPED_MODEL_PATTERN.finditer(clean):
+        if _match_inside_json_object(clean, match.start()):
+            continue
+        model = _clean_model(match.group(1))
         if model:
-            return model
-    model_usage_maps = re.findall(r'"modelUsage"\s*:\s*\{\s*"([^"]+)"', clean)
-    if model_usage_maps:
-        return _clean_model(model_usage_maps[-1])
+            header = model
+    if header:
+        return header
+    fields: list[str] = []
+    usage_keys: list[str] = []
+    for raw_line in clean.splitlines():
+        parsed = _json_object_line(raw_line)
+        if parsed is None:
+            continue
+        _collect_model_names(parsed, fields, usage_keys)
+    if fields:
+        return fields[0]
+    if usage_keys:
+        return usage_keys[-1]
     return ""
 
 

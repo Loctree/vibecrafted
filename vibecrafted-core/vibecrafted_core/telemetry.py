@@ -157,10 +157,24 @@ def estimate_cost_usd(
     )
 
 
-def _priced(price: ModelPrice, tokens_input: int, cached: int, output: int) -> float:
-    """USD for the given token counts at *price*, rounded to 6 places."""
+def _priced(
+    price: ModelPrice,
+    tokens_input: int,
+    cached: int,
+    output: int,
+    cache_write: int = 0,
+) -> float:
+    """USD for the given token counts at *price*, rounded to 6 places.
+
+    Cache writes are additive, the same way cache reads are not a subset of
+    input here. A missing write rate contributes nothing, so a caller that
+    measured no cache write keeps the previous amount. A positive write with
+    no rate is refused by :func:`resolve_cost` before this runs.
+    """
+    write_rate = price.cache_creation_per_million or 0
     cost = (
         tokens_input * price.input_per_million
+        + int(cache_write or 0) * write_rate
         + cached * price.cached_input_per_million
         + output * price.output_per_million
     ) / 1_000_000
@@ -190,6 +204,7 @@ def tokens_total(
 
 NO_USAGE_EVENTS_REASON = "provider emitted no usage events"
 NO_CACHE_WRITE_REASON = "provider stream carried no cache-write field"
+NO_MEASURED_COUNT_REASON = "measured usage did not record an integer count"
 NO_COST_REASON = "provider emitted no usage events and reported no cost"
 NO_MODEL_REASON = "model unknown; no price table lookup"
 NO_SESSION_REASON = "provider emitted no session id"
@@ -243,6 +258,33 @@ def unknown_reason(value: object) -> str:
     return ""
 
 
+_MODEL_PLACEHOLDERS = frozenset({"none", "null", "unknown", "pending"})
+_MODEL_CODE_CHARS = frozenset("&(){}")
+
+
+def is_model_name(value: object) -> bool:
+    """True when *value* is a real model label, not prose, a placeholder, or code.
+
+    One rule for every reader. Rejects non-strings, empty text,
+    ``none``/``null``/``unknown``/``pending`` in any case, ``<...>``,
+    ``*-cli-default``, a glued ``_source:`` marker, and the code characters
+    ``&(){}``. Spaces, slashes, brackets and ordinary colons stay, so
+    ``Grok 4.7 256K Extra High Fast``, ``provider/model`` and
+    ``claude-opus-5-5[1m]`` are names.
+    """
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text:
+        return False
+    folded = text.casefold()
+    if folded in _MODEL_PLACEHOLDERS or folded.endswith("-cli-default"):
+        return False
+    if "_source:" in folded or "<" in text or ">" in text:
+        return False
+    return not any(char in text for char in _MODEL_CODE_CHARS)
+
+
 # --------------------------------------------------------------------------
 # Usage
 # --------------------------------------------------------------------------
@@ -252,10 +294,13 @@ def unknown_reason(value: object) -> str:
 class UsageRecord:
     """Token usage of one run, with the channel it was read from.
 
-    ``events`` counts provider usage events actually observed. With zero
-    events every count is ``Unknown`` — a provider that stays silent did not
-    use zero tokens. ``source`` names the channel inspected
-    (``provider_stream``, ``transcript``, ``transcript(lazy)``).
+    ``events`` counts provider usage events actually observed. A silent
+    provider (``usage_record`` with zero events) is ``Unknown`` on every
+    count — silence is not zero tokens. A partial ``measured_usage`` is
+    different: each recorded integer, including zero, stays, and a missing
+    count is ``Unknown`` even when ``messages`` (and therefore ``events``)
+    is absent. ``source`` names the channel inspected (``provider_stream``,
+    ``transcript``, ``transcript(lazy)``, or the measurement source).
     """
 
     tokens_input: int | Unknown
@@ -450,8 +495,15 @@ def resolve_cost(
     ):
         return CostRecord(amount=Unknown(reason=NO_COST_REASON), source="unknown")
     tokens_in, cached, out = int(tokens_in), int(cached), int(out)
+    write = usage.tokens_cache_write
+    cache_write = write if isinstance(write, int) and not isinstance(write, bool) else 0
+    if cache_write > 0 and price.cache_creation_per_million is None:
+        return CostRecord(
+            amount=Unknown(reason=f"no cache creation rate for model {clean_model!r}"),
+            source="unknown",
+        )
     return CostRecord(
-        amount=_priced(price, tokens_in, cached, out),
+        amount=_priced(price, tokens_in, cached, out, cache_write),
         source=f"estimated:{price.source}",
     )
 
@@ -798,6 +850,57 @@ def coerce_exit_code(value: object) -> int | None:
     return int(text) if text.lstrip("-").isdigit() else None
 
 
+def _measured_count(value: object) -> int | Unknown:
+    """One recorded token count.
+
+    A real integer, including zero, stays that integer. ``bool`` is an
+    ``int`` subclass and is not a count. A missing value or any other
+    non-integer is ``Unknown`` — it is not zero.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return Unknown(reason=NO_MEASURED_COUNT_REASON)
+    return value
+
+
+def _usage_from_measured(
+    measured: Mapping[str, Any], meta: Mapping[str, Any]
+) -> UsageRecord:
+    """Project ``measured_usage`` as recorded. Do not recompute ``tokens_total``.
+
+    ``messages`` becomes ``events`` only when it is an integer. A missing
+    ``messages`` stays ``events: 0``. Cost of a partial record stays unknown
+    because pricing requires recorded input, cache-read, cache-write and output
+    counts, as well as at least one event.
+    """
+    measurement = meta.get("usage_measurement")
+    source = "meta"
+    if isinstance(measurement, Mapping):
+        recorded_source = measurement.get("source")
+        if isinstance(recorded_source, str) and recorded_source.strip():
+            source = recorded_source.strip()
+    messages = measured.get("messages")
+    events = (
+        messages if isinstance(messages, int) and not isinstance(messages, bool) else 0
+    )
+    return UsageRecord(
+        tokens_input=_measured_count(measured.get("input_tokens")),
+        tokens_cached_input=_measured_count(measured.get("cache_read_input_tokens")),
+        tokens_cache_write=_measured_count(measured.get("cache_creation_input_tokens")),
+        tokens_output=_measured_count(measured.get("output_tokens")),
+        tokens_total=_measured_count(measured.get("total_tokens")),
+        source=source,
+        events=events,
+    )
+
+
+def _first_model_name(*candidates: object) -> str:
+    """First candidate that :func:`is_model_name` accepts, else ""."""
+    for candidate in candidates:
+        if isinstance(candidate, str) and is_model_name(candidate):
+            return candidate.strip()
+    return ""
+
+
 def run_telemetry_from_meta(
     meta: Mapping[str, Any], *, transcript: Path | None
 ) -> dict[str, Any]:
@@ -817,16 +920,24 @@ def run_telemetry_from_meta(
         transcript if transcript is not None and transcript.is_file() else None
     )
     recorded = isinstance(meta.get("usage"), Mapping)
+    measured_raw = meta.get("measured_usage")
+    measured_run = not recorded and isinstance(measured_raw, Mapping)
 
     parser = AgentStreamParser(agent)
-    if not recorded and transcript_path is not None:
+    # A recorded usage block, or a measured_usage block, is the run. The
+    # transcript is prose and is not read back into tokens, model, or cost.
+    if not recorded and not measured_run and transcript_path is not None:
         with transcript_path.open("rb") as handle:
             for line in handle:
                 parser.feed_line(line)
 
-    model_value = str(
-        meta.get("agent_model") or meta.get("model") or parser.model_id or ""
-    ).strip()
+    model_value = _first_model_name(
+        meta.get("model_effective"),
+        meta.get("model_requested"),
+        meta.get("agent_model"),
+        meta.get("model"),
+        parser.model_id,
+    )
     model: str | dict[str, str] = (
         model_value or Unknown(reason=NO_MODEL_REPORTED_REASON).as_dict()
     )
@@ -846,6 +957,33 @@ def run_telemetry_from_meta(
         if provider_session in (None, ""):
             provider_session = Unknown(reason=NO_SESSION_REASON).as_dict()
         session_source = str(meta.get("provider_session_source") or "meta")
+        telemetry_source = "meta"
+    elif measured_run:
+        assert isinstance(measured_raw, Mapping)
+        usage = _usage_from_measured(measured_raw, meta)
+        usage_block = usage.as_dict()
+        if isinstance(meta.get("cost"), Mapping):
+            cost_block = cost_from_dict(meta["cost"]).as_dict()
+        elif isinstance(usage.tokens_cache_write, Unknown):
+            cost_block = CostRecord(
+                amount=Unknown(reason="measured cache-write count is unknown"),
+                source="unknown",
+            ).as_dict()
+        else:
+            cost_block = resolve_cost(
+                model_value,
+                usage,
+                reported_amount=None,
+                reported_source=None,
+            ).as_dict()
+        candidate, candidate_source = parser.session_id, LAZY_SOURCE
+        if not candidate:
+            candidate = str(meta.get("agent_session_id") or "")
+            candidate_source = "meta"
+        resolved, session_source = resolve_provider_session_id(
+            candidate, source=candidate_source, parents=_meta_parent_ids(meta)
+        )
+        provider_session = _project(resolved)
         telemetry_source = "meta"
     else:
         usage = usage_record(
@@ -911,8 +1049,18 @@ def run_telemetry_from_meta(
                 ).as_dict()
 
     if is_unknown(model) and len(usage_block.get("model_usage") or {}) == 1:
-        model = next(iter(usage_block["model_usage"]))
-    if cost_block.get("source") == "unknown" and usage_block.get("events"):
+        only_model = next(iter(usage_block["model_usage"]))
+        if isinstance(only_model, str) and is_model_name(only_model):
+            model = only_model
+            model_value = only_model
+    # Measured aggregates were priced above with their recorded buckets. This
+    # fallback is for older stream records; its missing cache-write convention
+    # must not turn an incomplete measured aggregate into a partial estimate.
+    if (
+        not measured_run
+        and cost_block.get("source") == "unknown"
+        and usage_block.get("events")
+    ):
         keys = ("tokens_input", "tokens_cached_input", "tokens_output", "tokens_total")
         if all(
             type(usage_block.get(key)) is int and usage_block[key] >= 0 for key in keys

@@ -26,17 +26,14 @@ macOS proof only: kernel PID/UID/start token and executable path come from
 libproc, socket peers from ``LOCAL_PEERPID``/``LOCAL_PEERCRED``. Linux has no
 equivalent proof here and is refused (the wrapper keeps the flat host there).
 
-Code identity: before any decision the host bytes must carry a valid static
-signature (Security.framework, strict) whose CodeDirectory hash and Team equal
-the selected generation's own ``libexec/vc-terminal``, located from this
-helper's physical path, never from caller environment. The fixed
-``/Applications`` host additionally needs a Team (no ad-hoc code) shared with
-its main app, as the installer pairs them. Any other host path is a private
-ad-hoc control: exact pairing still holds, a Team may be absent. A reused
-host must still run, per the kernel (``csops``), that exact admitted code: a
-path or inode is not loaded code identity. The static pair decides only as
-read under the admission lock, and is read again after delivery: a receipt
-never names code that is no longer the current admitted pair.
+Code identity: the independent vc-terminal.app must have the declared bundle
+identity and minimum version, with strict static signatures from Team
+MW223P3NPX on both bundle and executable. It is never hash-paired to runtime
+bytes. Historical bundled hosts retain their exact-pair proof for ownership
+checks, and private ad-hoc controls retain kernel and IPC identity checks.
+A reused host must still run that exact admitted CodeDirectory hash according
+to the kernel (``csops``). Static identity is checked under the admission lock
+and again after delivery; a receipt never names replaced code.
 
 𝚅𝚒𝚋𝚎𝚌𝚛𝚊𝚏𝚝𝚎𝚍. with AI Agents by Vetcoders (c)2024-2026 LibraxisAI
 """
@@ -47,8 +44,11 @@ import ctypes
 import errno
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
+import plistlib
+import re
 import socket
 import stat
 import subprocess
@@ -59,6 +59,8 @@ from pathlib import Path
 
 RECORD_SCHEMA = "vibecrafted.terminal-host.v1"
 RECEIPT_SCHEMA = "vibecrafted.terminal-launch-receipt.v1"
+MAIN_OWNER_NOTIFICATION = "io.vetcoders.vibecrafted.terminal-host-requested"
+MAIN_OWNER_FLAG = "--terminal-host-owner"
 STATE_DIR_ENV = "VIBECRAFTED_TERMINAL_HOST_DIR"
 LOCK_WAIT_SECONDS = 20.0
 STARTUP_WAIT_SECONDS = 15.0
@@ -84,6 +86,10 @@ _SOL_LOCAL, _LOCAL_PEERCRED, _LOCAL_PEERPID = 0, 0x001, 0x002
 _PROC_PIDTBSDINFO, _BSDINFO_SIZE, _PATH_MAX = 3, 136, 4096
 
 FIXED_HOST = "/Applications/Vibecrafted.app/Contents/MacOS/vc-terminal"
+STANDALONE_HOST = "/Applications/vc-terminal.app/Contents/MacOS/vc-terminal"
+FIXED_HOSTS = (STANDALONE_HOST, FIXED_HOST)
+STANDALONE_BUNDLE_ID = "io.vetcoders.vc-terminal"
+STANDALONE_MIN_VERSION = (0, 18, 0)
 # <sys/codesign.h> csops operations and flags; CS_CDHASH_LEN.
 _CS_OPS_STATUS, _CS_OPS_CDHASH, _CS_VALID, _CS_ADHOC, _CDHASH_LEN = 0, 5, 0x1, 0x2, 20
 # <Security/CSCommon.h>, <Security/SecStaticCode.h>, <Security/SecCode.h>.
@@ -319,8 +325,62 @@ def generation_terminal() -> str:
 
 
 def production_policy(host: str) -> bool:
-    """Only the fixed app path is the product; the path, not caller env, decides."""
-    return host == FIXED_HOST
+    """Only a fixed /Applications app path is the product; the path, not caller env, decides."""
+    return host in FIXED_HOSTS
+
+
+def _parse_version_tuple(raw: str) -> tuple[int, int, int] | None:
+    parts = str(raw or "").strip().split(".")
+    if len(parts) < 2:
+        return None
+    numbers: list[int] = []
+    for part in parts[:3]:
+        match = re.match(r"^(\d+)", part)
+        if match is None:
+            return None
+        numbers.append(int(match.group(1)))
+    while len(numbers) < 3:
+        numbers.append(0)
+    return (numbers[0], numbers[1], numbers[2])
+
+
+def require_standalone_bundle_metadata(host: str) -> None:
+    plist_path = Path(host).parents[1] / "Info.plist"
+    try:
+        info = os.lstat(plist_path)
+        if not stat.S_ISREG(info.st_mode):
+            raise Refusal(
+                EX_CONFIG,
+                f"standalone terminal Info.plist is not a regular file: {plist_path}",
+            )
+        with plist_path.open("rb") as handle:
+            document = plistlib.load(handle)
+    except Refusal:
+        raise
+    except (OSError, plistlib.InvalidFileException, ValueError, TypeError) as exc:
+        raise Refusal(
+            EX_CONFIG, f"standalone terminal Info.plist unreadable: {plist_path}: {exc}"
+        ) from None
+    if not isinstance(document, dict):
+        raise Refusal(
+            EX_CONFIG, f"standalone terminal Info.plist malformed: {plist_path}"
+        )
+    if document.get("CFBundleIdentifier") != STANDALONE_BUNDLE_ID:
+        raise Refusal(
+            EX_CONFIG, f"standalone terminal bundle identifier mismatch: {plist_path}"
+        )
+    if document.get("CFBundleExecutable") != "vc-terminal":
+        raise Refusal(
+            EX_CONFIG, f"standalone terminal executable mismatch: {plist_path}"
+        )
+    version = _parse_version_tuple(
+        str(document.get("CFBundleShortVersionString") or "")
+    )
+    if version is None or version < STANDALONE_MIN_VERSION:
+        raise Refusal(
+            EX_CONFIG,
+            f"standalone terminal version {document.get('CFBundleShortVersionString')!r} is older than {'.'.join(map(str, STANDALONE_MIN_VERSION))}",
+        )
 
 
 def require_paired_developer_id(host: str, identity: CodeIdentity) -> None:
@@ -329,13 +389,34 @@ def require_paired_developer_id(host: str, identity: CodeIdentity) -> None:
             EX_CONFIG,
             f"fixed terminal host is not Developer ID signed (ad-hoc or no Team): {host}",
         )
+    if host == STANDALONE_HOST and identity.team != "MW223P3NPX":
+        raise Refusal(EX_CONFIG, "vc-terminal must be signed by Team MW223P3NPX")
     bundle = static_code_identity(str(Path(host).parents[2]), basic=True)
     if bundle.team != identity.team:
         raise Refusal(EX_CONFIG, "main app and terminal signing owners differ")
 
 
+def _is_standalone_terminal_bundle_path(host: str) -> bool:
+    return host == STANDALONE_HOST or (
+        host.endswith("/vc-terminal.app/Contents/MacOS/vc-terminal")
+        and not host.endswith("/libexec/vc-terminal.app/Contents/MacOS/vc-terminal")
+    )
+
+
 def admitted_code_identity(host: str) -> CodeIdentity:
     """Static host code paired with the selected generation under its policy."""
+    if _is_standalone_terminal_bundle_path(host):
+        identity = static_code_identity(host)
+        require_standalone_bundle_metadata(host)
+        if production_policy(host):
+            require_paired_developer_id(host, identity)
+        elif identity.team is not None and identity.team != "MW223P3NPX":
+            raise Refusal(
+                EX_CONFIG, "standalone terminal must be signed by Team MW223P3NPX"
+            )
+        # Private ad-hoc controls prove their own loaded code and IPC owner.
+        # Independent products have no generation-local binary to pair with.
+        return identity
     expected = static_code_identity(generation_terminal())
     identity = static_code_identity(host)
     if (identity.cdhash, identity.team) != (expected.cdhash, expected.team):
@@ -379,15 +460,16 @@ def owns_fixed_terminal_ancestor(start_pid: int | None = None) -> bool:
         # fallback; an outer fixed app must not override that nearer boundary.
         if identity.executable in generation_local:
             return False
-        if identity.executable == FIXED_HOST:
+        if identity.executable in FIXED_HOSTS:
+            matched_host = identity.executable
             if identity.uid != os.getuid():
                 raise Refusal(
                     EX_TEMPFAIL, f"fixed terminal host {pid} belongs to another user"
                 )
-            before = admitted_code_identity(FIXED_HOST)
+            before = admitted_code_identity(matched_host)
             live = live_code_hash(pid)
             again = process_identity(pid)
-            after = admitted_code_identity(FIXED_HOST)
+            after = admitted_code_identity(matched_host)
             if (before.cdhash, before.team) != (after.cdhash, after.team):
                 raise Refusal(
                     EX_TEMPFAIL,
@@ -397,7 +479,7 @@ def owns_fixed_terminal_ancestor(start_pid: int | None = None) -> bool:
                 again is None
                 or again.start != identity.start
                 or again.uid != identity.uid
-                or again.executable != FIXED_HOST
+                or again.executable != matched_host
             ):
                 raise Refusal(
                     EX_TEMPFAIL, "fixed terminal host identity changed during admission"
@@ -813,6 +895,124 @@ def _clear_own_stale_socket(path: Path) -> None:
     raise Refusal(EX_TEMPFAIL, f"host socket path has a live listener: {path}")
 
 
+def _main_identity_module():
+    """Reuse the installer's signed Main-role proof from this exact generation."""
+    source = Path(__file__).resolve().parents[2] / "scripts/lib/app-main-identity.py"
+    if not source.is_file() or source.is_symlink():
+        raise Refusal(EX_CONFIG, "signed Main identity helper is unavailable")
+    spec = importlib.util.spec_from_file_location("vc_terminal_main_identity", source)
+    if spec is None or spec.loader is None:
+        raise Refusal(EX_CONFIG, "signed Main identity helper is unreadable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def ensure_main_owner(host: str) -> None:
+    """Hosted windows have one public Main owner; never elect by bundle ID alone."""
+    if host != FIXED_HOST:
+        return
+    identity = _main_identity_module()
+    try:
+        api = identity.MacOS()
+        bundle = str(Path(host).parents[2])
+        proof = identity.inspect_main(api, bundle)
+        if not proof:
+            opened = subprocess.run(
+                ["/usr/bin/open", "-g", "-n", bundle, "--args", MAIN_OWNER_FLAG],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if opened.returncode:
+                raise Refusal(EX_TEMPFAIL, "the signed Main owner could not be opened")
+            deadline = time.monotonic() + STARTUP_WAIT_SECONDS
+            while not proof and time.monotonic() < deadline:
+                time.sleep(0.05)
+                proof = identity.inspect_main(api, bundle)
+        if not proof:
+            raise Refusal(EX_TEMPFAIL, "the signed Main owner is not registered")
+        pid = int(proof.splitlines()[0])
+        if pid <= 0:
+            raise ValueError("invalid Main pid")
+        # No path, command or launch authority is carried by this notification.
+        # The addressed Main re-reads the authenticated durable host record.
+        center = api.send(
+            api.objc.objc_getClass(b"NSDistributedNotificationCenter"), "defaultCenter"
+        )
+        if not center:
+            raise ValueError("Main notification center unavailable")
+        name, target = api.string(MAIN_OWNER_NOTIFICATION), api.string(str(pid))
+        try:
+            api.send(
+                center,
+                "postNotificationName:object:userInfo:deliverImmediately:",
+                name,
+                target,
+                None,
+                True,
+                result=None,
+                types=(
+                    ctypes.c_void_p,
+                    ctypes.c_void_p,
+                    ctypes.c_void_p,
+                    ctypes.c_bool,
+                ),
+            )
+        finally:
+            api.cf.CFRelease(name)
+            api.cf.CFRelease(target)
+    except Refusal:
+        raise
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        raise Refusal(
+            EX_TEMPFAIL, f"signed Main ownership is unconfirmed: {error}"
+        ) from None
+
+
+def observe_host(host: str, environ: dict[str, str]) -> dict:
+    """Observe existing admission authority; never launch a host or a window."""
+    if not os.path.isabs(host) or os.path.realpath(host) != host:
+        raise Refusal(EX_CONFIG, f"host path is not canonical: {host}")
+    admitted_code_identity(host)
+    directory = state_directory(environ, host)
+    lock = acquire_lock(directory)
+    try:
+        code = admitted_code_identity(host)
+        record = read_record(directory)
+        state = host_state(record, host, code) if record else "stale"
+        deadline = time.monotonic() + STARTUP_WAIT_SECONDS
+        while state == "starting":
+            if time.monotonic() >= deadline:
+                raise Refusal(EX_TEMPFAIL, "admitted terminal is still starting")
+            time.sleep(0.05)
+            state = host_state(record, host, code)
+        if state != "live":
+            return {
+                "schema": RECEIPT_SCHEMA,
+                "kind": "absent",
+                "agent_start_proven": False,
+            }
+        current = admitted_code_identity(host)
+        if current != code or host_state(record, host, current) != "live":
+            raise Refusal(EX_TEMPFAIL, "admitted terminal changed during observation")
+        return {
+            "schema": RECEIPT_SCHEMA,
+            "kind": "observed",
+            "host_pid": record["pid"],
+            "host_start": record["start"],
+            "executable": host,
+            "delivery": "host_observed_without_window_request",
+            "code_cdhash": current.cdhash,
+            "code_proof": "kernel_live_cdhash",
+            "agent_start_proven": False,
+        }
+    finally:
+        os.close(lock)
+
+
 def admit(
     wrapper_pid: int,
     host: str,
@@ -851,6 +1051,7 @@ def admit(
             state = host_state(record, host, code)
         if state == "live":
             assert record is not None
+            ensure_main_owner(host)
             env_file = write_env_file(directory, environ)
             shim = [
                 python,
@@ -941,6 +1142,7 @@ def admit(
                 },
             )
         _write_private_json(directory / "host.json", fresh, exclusive=False)
+        ensure_main_owner(host)
         return "fresh"
     finally:
         os.close(lock)
@@ -953,6 +1155,11 @@ def main(argv: list[str]) -> int:
             return EX_USAGE
         return spawn(argv[1], argv[3:])
     try:
+        if argv[:1] == ["observe"]:
+            if len(argv) != 3 or argv[1] != "--host":
+                raise Refusal(EX_USAGE, "usage: observe --host HOST")
+            print(json.dumps(observe_host(argv[2], dict(os.environ))))
+            return 0
         if argv[:1] == ["owns-fixed-host"]:
             if len(argv) != 1:
                 raise Refusal(EX_USAGE, "usage: owns-fixed-host")

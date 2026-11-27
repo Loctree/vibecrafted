@@ -398,41 +398,142 @@ enum RuntimeResolution<Runtime> {
   /// Never a licence to overwrite: that would walk the Founder's runtime
   /// backwards from an older carrier.
   case unusable(String)
+  /// An installation older than this App's carrier; the payload is its
+  /// generation label. Its own installer was deliberately not asked: an older
+  /// runtime never adjudicates a newer App. The only remedy is the upgrade the
+  /// carrier installer performs.
+  case outdated(String)
 }
 
-/// Presentation of the existing carrier confirmation, using the owner's
-/// current answer. An unresolved launch contract is never installation absence.
+// MARK: - Carrier ordering
+
+/// How this App's carrier generation relates to the active one.
+///
+/// Presentation and routing only. Whether a publication is admitted — identity,
+/// signatures, the downgrade tripwire — stays with the carrier installer.
+enum RuntimeCarrierRelation: Equatable {
+  /// The carrier is a strictly newer release than the active generation.
+  case upgrade
+  /// Both carry the same generation label.
+  case current
+  /// Same release, different or unstamped build: no ordering proof.
+  case sameRelease
+  /// The carrier is a strictly older release than the active generation.
+  case downgrade
+  /// At least one label carries no parseable release.
+  case unordered
+}
+
+/// The `X.Y.Z` release of a generation label `X.Y.Z+g<shortsha>`, or nil for a
+/// label that is not exactly three non-negative integers.
+func runtimeGenerationRelease(_ generation: String) -> [Int]? {
+  guard
+    let version = generation.split(
+      separator: "+", maxSplits: 1, omittingEmptySubsequences: false
+    ).first
+  else { return nil }
+  let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+  guard parts.count == 3 else { return nil }
+  let values = parts.compactMap { Int($0) }
+  return values.count == 3 && values.allSatisfy { $0 >= 0 } ? values : nil
+}
+
+/// The version a person reads in a title: the label without its build stamp.
+func runtimeGenerationVersion(_ generation: String) -> String {
+  generation.split(separator: "+", maxSplits: 1, omittingEmptySubsequences: false)
+    .first.map(String.init) ?? generation
+}
+
+/// Order the active generation against this App's carrier.
+///
+/// Only a strictly newer release is an upgrade and only a strictly older one a
+/// downgrade. Different hashes of one release prove no order.
+func runtimeCarrierRelation(active: String, carrier: String) -> RuntimeCarrierRelation {
+  guard !active.isEmpty, !carrier.isEmpty else { return .unordered }
+  // Identical labels are the same generation whether or not they parse.
+  if active == carrier { return .current }
+  guard let installed = runtimeGenerationRelease(active),
+    let candidate = runtimeGenerationRelease(carrier)
+  else { return .unordered }
+  if installed.lexicographicallyPrecedes(candidate) { return .upgrade }
+  if candidate.lexicographicallyPrecedes(installed) { return .downgrade }
+  return .sameRelease
+}
+
+/// The one sentence shown when this App would walk the runtime backwards.
+func runtimeDowngradeRefusal(installed: String, carrier: String) -> String {
+  "This App carries \(carrier), which is older than the installed \(installed); "
+    + "Vibecrafted never downgrades a runtime — update this App to "
+    + "\(runtimeGenerationVersion(installed)) or newer."
+}
+
+/// Why an outdated installation is not usable from this App, in one line.
+func runtimeOutdatedReason(installed: String, carrier: String) -> String {
+  "Upgrade to Vibecrafted \(runtimeGenerationVersion(carrier)) is required: the installed "
+    + "runtime \(installed) is older than this App. Choose Repair Runtime… to upgrade."
+}
+
+/// Presentation of the carrier confirmation, using the owner's current
+/// answer. An unresolved launch contract is never installation absence.
 struct RuntimeReinstallPresentation {
   let title: String
   let detail: String
   let actionTitle: String?
+  /// Headline over the installer's own refusal when the offered action fails.
+  let failureTitle: String
 }
 
+/// Decide what the App offers for this installation.
+///
+/// - carrier newer than the active generation: Upgrade;
+/// - carrier equal to an active generation that cannot be verified: Repair;
+/// - carrier older than the active generation: a refusal sentence, no action.
+///
+/// Every action runs the installer carried by this App. `activeGeneration` is
+/// the pointer's own label, used only when the owner could not describe the
+/// installation.
 func runtimeReinstallPresentation(
   resolution: RuntimeResolution<String>,
   carrierGeneration: String,
   configuration: String,
   serviceFailure: String? = nil,
-  canUpgrade: Bool = false,
+  activeGeneration: String? = nil,
   explicitRepublish: Bool = false
 ) -> RuntimeReinstallPresentation {
+  let upgradeTitle = "Upgrade to Vibecrafted \(runtimeGenerationVersion(carrierGeneration))"
+  let upgradeFailure = "Vibecrafted could not upgrade its runtime"
   var title: String
   var detail: String
   var actionTitle: String?
+  var failureTitle = "Vibecrafted could not reinstall its runtime"
+  var republishHint = true
   switch resolution {
   case .ready(let installed):
     detail = "Installed generation: \(installed)."
-    if canUpgrade {
-      title = "Upgrade the Vibecrafted runtime from this App?"
-      actionTitle = "Upgrade"
-    } else if installed == carrierGeneration {
+    switch runtimeCarrierRelation(active: installed, carrier: carrierGeneration) {
+    case .upgrade:
+      title = upgradeTitle + "?"
+      actionTitle = upgradeTitle
+      failureTitle = upgradeFailure
+    case .current:
       title = "Vibecrafted runtime already current"
       detail += "\nThis App carries the same generation."
-    } else {
+    case .downgrade:
+      title = "This App carries an older runtime"
+      detail += "\n" + runtimeDowngradeRefusal(installed: installed, carrier: carrierGeneration)
+      republishHint = false
+    case .sameRelease, .unordered:
       title = "Use this App's runtime?"
       actionTitle = "Use this App runtime"
       detail += "\nThis App carries a different build. Publishing it is your explicit choice."
     }
+  case .outdated(let installed):
+    title = upgradeTitle + "?"
+    detail =
+      "Installed generation: \(installed).\n"
+      + "This App carries a newer runtime. The installed generation is not asked to judge it."
+    actionTitle = upgradeTitle
+    failureTitle = upgradeFailure
   case .absent(let reason):
     title = "Install the Vibecrafted runtime from this App?"
     detail = "No runtime installation was found.\n\(reason)"
@@ -440,6 +541,30 @@ func runtimeReinstallPresentation(
   case .unusable(let reason):
     title = "Runtime installation could not be verified"
     detail = "Runtime installation could not be verified.\n\(reason)"
+    if let installed = activeGeneration, !installed.isEmpty {
+      detail = "Installed generation: \(installed).\nIt could not be verified: \(reason)"
+      switch runtimeCarrierRelation(active: installed, carrier: carrierGeneration) {
+      case .upgrade:
+        title = upgradeTitle + "?"
+        actionTitle = upgradeTitle
+        failureTitle = upgradeFailure
+      case .current:
+        title = "Repair the Vibecrafted runtime from this App?"
+        actionTitle = "Repair"
+        failureTitle = "Vibecrafted could not repair its runtime"
+        detail += "\nThis App carries the same generation."
+      case .sameRelease:
+        title = "Use this App's runtime?"
+        actionTitle = "Use this App runtime"
+        detail += "\nThis App carries a different build. Publishing it is your explicit choice."
+      case .downgrade:
+        title = "This App carries an older runtime"
+        detail += "\n" + runtimeDowngradeRefusal(installed: installed, carrier: carrierGeneration)
+        republishHint = false
+      case .unordered:
+        break
+      }
+    }
   }
   if !configuration.isEmpty { detail += "\n\n" + configuration }
   if let failure = serviceFailure {
@@ -451,13 +576,52 @@ func runtimeReinstallPresentation(
   if explicitRepublish {
     title = "Republish the Vibecrafted runtime from this App?"
     actionTitle = "Republish anyway"
-  } else if actionTitle == nil {
+    failureTitle = "Vibecrafted could not republish its runtime"
+  } else if actionTitle == nil, republishHint {
     detail += "\nTo publish this carrier again, explicitly choose Republish anyway… in the App menu."
   }
   if actionTitle != nil {
     detail += "\nThis publishes the Runtime Pack carried by this App. The installer refuses to replace a newer runtime with an older carrier."
   }
-  return RuntimeReinstallPresentation(title: title, detail: detail, actionTitle: actionTitle)
+  return RuntimeReinstallPresentation(
+    title: title, detail: detail, actionTitle: actionTitle, failureTitle: failureTitle)
+}
+
+/// The installer's refusal exactly as it said it: the last non-empty line of
+/// its stderr. The owner ends a refusal with one human sentence, and that
+/// sentence — not this App's paraphrase — is what a person is shown.
+func installerRefusalLine(stderr: Data) -> String? {
+  guard let text = String(data: stderr, encoding: .utf8) else { return nil }
+  return
+    text
+    .split(whereSeparator: { $0.isNewline })
+    .map { $0.trimmingCharacters(in: .whitespaces) }
+    .last(where: { !$0.isEmpty })
+}
+
+/// What a failed Runtime Pack installer run is reported as.
+///
+/// A refusal the installer writes itself ends with one human sentence, shown
+/// exactly as written: it is the admission owner's verdict, not material for
+/// this App to rephrase. A refusal raised as an exception (the downgrade
+/// refusal is one) carries its verdict in a message of several lines, with the
+/// facts after the first, so its last line is only the last fact. That message
+/// is kept whole, frames removed. A run that never reached a verdict (killed,
+/// timed out or silent) is described here.
+func runtimePackInstallerFailureDetail(
+  stdout: Data, stderr: Data, terminationStatus: Int32, clean: Bool, timedOut: Bool
+) -> String {
+  let diagnostic = boundedResolverDiagnostic(stdout: stdout, stderr: stderr, limit: 480)
+  if timedOut {
+    return
+      "the Runtime Pack installer timed out; its durable transaction will recover or report its lease state\(diagnostic)"
+  }
+  let raised = String(data: stderr, encoding: .utf8)?
+    .contains("Traceback (most recent call last):") ?? false
+  if clean, !raised, let refusal = installerRefusalLine(stderr: stderr) {
+    return refusal
+  }
+  return "the Runtime Pack installer exited \(terminationStatus)\(diagnostic)"
 }
 
 /// `vibecrafted.runtime-resolution.v1`. Unknown keys are ignored on purpose —
@@ -550,33 +714,70 @@ func isTracebackScaffolding(_ line: String) -> Bool {
 
 /// Drop interpreter frames, keep what the owner actually said.
 ///
-/// A frame is followed by the source line it points at, so both go: an
-/// operator cannot act on either, and together they crowd out the exception
-/// line that carries the real message. If a payload turns out to be *only*
-/// scaffolding, the last line is kept rather than returning nothing — an empty
-/// diagnostic is worse than a noisy one.
+/// Inside a traceback every indented line is scaffolding: the frame, the
+/// source it points at, the caret tail. Python 3.13 prints a multi-line
+/// statement as several source lines plus a `...<n lines>...` marker, so
+/// skipping "the one line after a frame" let fragments of the installer's own
+/// code into a Founder-facing dialog. The exception line is the first line
+/// back at column zero; indented lines after it are the continuation of its
+/// message and are kept. If a payload turns out to be *only* scaffolding, the
+/// last line is kept rather than returning nothing — an empty diagnostic is
+/// worse than a noisy one.
 func meaningfulOwnerLines(_ text: String) -> [String] {
-  let lines =
-    text
-    .split(whereSeparator: { $0.isNewline })
-    .map { $0.trimmingCharacters(in: .whitespaces) }
-    .filter { !$0.isEmpty }
+  let raw = text.split(whereSeparator: { $0.isNewline }).map(String.init)
   var kept: [String] = []
-  var skipSource = false
-  for line in lines {
+  var inFrames = false
+  for rawLine in raw {
+    let line = rawLine.trimmingCharacters(in: .whitespaces)
+    if line.isEmpty { continue }
     if isTracebackScaffolding(line) {
-      skipSource = line.hasPrefix("File \"")
+      if line == "Traceback (most recent call last):" || line.hasPrefix("File \"") {
+        inFrames = true
+      }
       continue
     }
-    if skipSource {
-      skipSource = false
-      if isTracebackCaret(line) { continue }
-      continue
+    let indented = rawLine.first.map { $0 == " " || $0 == "\t" } ?? false
+    if inFrames {
+      if indented { continue }
+      inFrames = false
     }
-    if isTracebackCaret(line) { continue }
     kept.append(line)
   }
-  return kept.isEmpty ? Array(lines.suffix(1)) : kept
+  if kept.isEmpty, let last = raw.last?.trimmingCharacters(in: .whitespaces), !last.isEmpty {
+    return [last]
+  }
+  return kept
+}
+
+/// What the Founder sees when publishing this App's carrier failed.
+///
+/// The owner refusing an older carrier is not a malfunction: nothing was
+/// changed and the installed runtime is the newer one. It gets a plain
+/// statement and the one move that helps, not a critical alert.
+struct RuntimeReinstallFailurePresentation {
+  let title: String
+  let detail: String
+  let critical: Bool
+}
+
+func runtimeReinstallFailurePresentation(_ description: String)
+  -> RuntimeReinstallFailurePresentation
+{
+  let marker = "refusing to replace a newer active runtime"
+  guard description.contains(marker) else {
+    return RuntimeReinstallFailurePresentation(
+      title: "Vibecrafted could not reinstall its runtime", detail: description, critical: true)
+  }
+  var detail = "Nothing was changed. The installed runtime is newer than the one this App carries."
+  let facts = description.components(separatedBy: " · ").filter {
+    $0.hasPrefix("candidate Runtime Pack")
+  }
+  if let fact = facts.first {
+    detail += "\n\n" + fact.trimmingCharacters(in: CharacterSet(charactersIn: "… "))
+  }
+  detail += "\n\nInstall a newer Vibecrafted App to bring the App and its runtime back in step."
+  return RuntimeReinstallFailurePresentation(
+    title: "This App is older than the installed runtime", detail: detail, critical: false)
 }
 
 /// One short single-line excerpt of what the owner said, for the tray, the
@@ -609,6 +810,10 @@ enum RuntimeResolverBootstrap {
   case absent(String)
   /// An installation is present but this App cannot even ask about it.
   case unusable(String)
+  /// The active generation is an older release than this App's carrier. Its
+  /// installer is never executed: admission rules come from the generation
+  /// being published, so the carrier installer is the one that speaks.
+  case outdated(String)
 }
 
 /// Filesystem probes the bootstrap needs, injected so this policy holds no
@@ -673,9 +878,49 @@ func pathIsBeneath(_ candidate: URL, _ directory: URL) -> Bool {
   return candidate.standardizedFileURL.path.hasPrefix(prefix)
 }
 
+/// What the active-generation pointer names.
+enum ActiveRuntimeGeneration {
+  /// The generation root, link-resolved and contained in this home's releases.
+  case named(URL)
+  /// The pointer cannot be trusted to name a generation; the payload says why.
+  case unreadable(String)
+}
+
+/// Read the active-generation pointer — the single reader of `active.json` in
+/// this App. Links are resolved on both sides before comparing, and therefore
+/// before anything found through the result is executed or compared: a pointer
+/// that leaves this home's releases directory is an escape, not a generation.
+func activeRuntimeGeneration(
+  runtimeHome: URL, probe: RuntimeIdentityProbe
+) -> ActiveRuntimeGeneration {
+  let pointer = activeRuntimePointerURL(runtimeHome: runtimeHome)
+  guard let pointerData = probe.read(pointer), !pointerData.isEmpty else {
+    return .unreadable("\(pointer.path) cannot be read")
+  }
+  guard
+    let document = try? JSONDecoder().decode(ActiveRuntimePointer.self, from: pointerData),
+    let root = document.runtimeRoot, root.hasPrefix("/")
+  else {
+    return .unreadable("\(pointer.path) names no absolute generation root")
+  }
+  let generation = probe.realPath(URL(fileURLWithPath: root, isDirectory: true))
+  let releases = probe.realPath(runtimeHome)
+    .appendingPathComponent("releases", isDirectory: true)
+  guard pathIsBeneath(generation, releases) else {
+    return .unreadable("the active generation escapes \(releases.path)")
+  }
+  return .named(generation)
+}
+
 /// Decide whether the owner can be asked, and refuse honestly when it cannot.
+///
+/// `carrierGeneration` is this App's own generation label. It is required on
+/// purpose: when the active generation is an older release, its installer must
+/// not run at all, and a caller that could omit the carrier could reopen that
+/// path without noticing.
 func runtimeResolverBootstrap(
   runtimeHome: URL,
+  carrierGeneration: String?,
   probe: RuntimeIdentityProbe
 ) -> RuntimeResolverBootstrap {
   let pointer = activeRuntimePointerURL(runtimeHome: runtimeHome)
@@ -696,24 +941,18 @@ func runtimeResolverBootstrap(
   guard receiptPresent else {
     return .unusable("\(pointer.path) exists with no install receipt beside it")
   }
-  guard let pointerData = probe.read(pointer), !pointerData.isEmpty else {
-    return .unusable("\(pointer.path) cannot be read")
-  }
-  guard
-    let document = try? JSONDecoder().decode(ActiveRuntimePointer.self, from: pointerData),
-    let root = document.runtimeRoot, root.hasPrefix("/")
-  else {
-    return .unusable("\(pointer.path) names no absolute generation root")
+  let generation: URL
+  switch activeRuntimeGeneration(runtimeHome: runtimeHome, probe: probe) {
+  case .unreadable(let reason): return .unusable(reason)
+  case .named(let root): generation = root
   }
 
-  // Resolve links on both sides before comparing, and therefore before
-  // executing anything found through the result: a pointer that leaves this
-  // home's releases directory is an escape, not a generation.
-  let generation = probe.realPath(URL(fileURLWithPath: root, isDirectory: true))
-  let releases = probe.realPath(runtimeHome)
-    .appendingPathComponent("releases", isDirectory: true)
-  guard pathIsBeneath(generation, releases) else {
-    return .unusable("the active generation escapes \(releases.path)")
+  // An older runtime never adjudicates a newer App. Decided here, before the
+  // interpreter and installer of that generation are even located.
+  if let carrier = carrierGeneration,
+    runtimeCarrierRelation(active: generation.lastPathComponent, carrier: carrier) == .upgrade
+  {
+    return .outdated(generation.lastPathComponent)
   }
 
   let python = generation.appendingPathComponent("bin/python3")
@@ -781,7 +1020,7 @@ func runtimeResolutionCacheLifetime<Runtime>(
 ) -> TimeInterval {
   switch resolution {
   case .ready: return 30
-  case .absent: return 5
+  case .absent, .outdated: return 5
   case .unusable: return min(60, 5 * pow(2, Double(min(4, max(0, consecutiveFailures - 1)))))
   }
 }

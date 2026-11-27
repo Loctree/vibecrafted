@@ -100,6 +100,11 @@ filter_core="$(spawn_python_core_path 2>/dev/null || { cd "$SCRIPT_DIR/../../.."
 # One encoder for every lane (async supervisor, this launcher, tests):
 # vibecrafted_core.prompt_transport writes the 0600 NDJSON carrier.
 PYTHONPATH="$filter_core" "$(spawn_python_bin)" -m vibecrafted_core.prompt_transport agy "$runtime_input" "$runtime_stream" >/dev/null
+# The print-mode time limit has the same single owner. It is empty unless the
+# operator set VIBECRAFTED_AGY_PRINT_TIMEOUT: a launcher-imposed limit cuts the
+# turn before its commit and report while agy still exits 0.
+agy_print_limit="$(PYTHONPATH="$filter_core" "$(spawn_python_bin)" -m vibecrafted_core.prompt_transport --print-limit-flags agy)" \
+  || spawn_die "Could not resolve the agy print limit (VIBECRAFTED_AGY_PRINT_TIMEOUT); the reason is printed above"
 spawn_write_meta "$SPAWN_META" "launching" "agy" "$mode" "$SPAWN_ROOT" "$SPAWN_PLAN" "$SPAWN_REPORT" "$SPAWN_TRANSCRIPT" "$SPAWN_LAUNCHER"
 
 if (( !dry_run )); then
@@ -166,7 +171,7 @@ qfilter_cmd="PYTHONPATH=$qfilter_core $qfilter_py -m vibecrafted_core.agent_stre
 last_message_extract="if [[ ! -s $qlast_message && -s $qtranscript ]]; then cp $qtranscript $qlast_message 2>/dev/null || rm -f $qlast_message; fi; [[ -s $qlast_message ]] || rm -f $qlast_message;"
 salvage_success_report="if [[ \$pipeline_status -eq 0 && ! -s $qreport && -s $qlast_message ]]; then { printf '%s\n' '---'; printf 'run_id: %s\n' \"\${SPAWN_RUN_ID:-unknown}\"; printf 'prompt_id: %s\n' \"\${SPAWN_PROMPT_ID:-unknown}\"; printf 'agent: %s\n' \"\${SPAWN_AGENT:-agy}\"; printf 'skill: %s\n' \"\${SPAWN_SKILL_CODE:-unknown}\"; printf 'model: %s\n' \"\${SPAWN_MODEL:-unknown}\"; printf 'status: completed\n'; printf 'session_id: %s\n' \"\${SPAWN_SESSION_ID:-pending}\"; printf 'repo_path: %s\n' \"\${SPAWN_ROOT:-unknown}\"; printf 'tokens_input: 0\n'; printf 'tokens_output: 0\n'; printf 'tokens_total: 0\n'; printf 'cost_usd: unknown\n'; printf '%s\n\n' '---'; cat $qlast_message; } > $qreport || pipeline_status=\$?; fi;"
 salvage_failure_report="if [[ \$pipeline_status -ne 0 && ! -s $qreport ]]; then { printf '%s\n' '---'; printf 'run_id: %s\n' \"\${SPAWN_RUN_ID:-unknown}\"; printf 'prompt_id: %s\n' \"\${SPAWN_PROMPT_ID:-unknown}\"; printf 'agent: %s\n' \"\${SPAWN_AGENT:-agy}\"; printf 'skill: %s\n' \"\${SPAWN_SKILL_CODE:-unknown}\"; printf 'model: %s\n' \"\${SPAWN_MODEL:-unknown}\"; printf 'status: failed\n'; printf 'session_id: %s\n' \"\${SPAWN_SESSION_ID:-pending}\"; printf 'repo_path: %s\n' \"\${SPAWN_ROOT:-unknown}\"; printf 'tokens_input: 0\n'; printf 'tokens_output: 0\n'; printf 'tokens_total: 0\n'; printf 'cost_usd: unknown\n'; printf '%s\n\n' '---'; if [[ -s $qlast_message ]]; then cat $qlast_message; else printf '%s\n' 'Agy failed before writing a standalone report file, and no final message was captured.'; printf '%s\n' 'See transcript for the full event stream:'; printf '%s\n' $qtranscript; printf '%s\n' 'Last message path checked:'; printf '%s\n' $qlast_message; fi; } > $qreport; fi;"
-launch_cmd="set -o pipefail && cd $qroot && { rm -f $qlast_message; agy --print= --input-format stream-json --output-format stream-json $SPAWN_PERMISSION_FLAGS --add-dir $qroot --print-timeout 30m $model_flag < $qstream 2>&1 | tee -a $qtranscript | $qfilter_cmd; pipeline_status=\$?; $last_message_extract $salvage_success_report $salvage_failure_report exit \$pipeline_status; }"
+launch_cmd="set -o pipefail && cd $qroot && { rm -f $qlast_message; agy --print= --input-format stream-json --output-format stream-json $SPAWN_PERMISSION_FLAGS --add-dir $qroot $agy_print_limit $model_flag < $qstream 2>&1 | tee -a $qtranscript | $qfilter_cmd; pipeline_status=\$?; $last_message_extract $salvage_success_report $salvage_failure_report exit \$pipeline_status; }"
 
 combined_success="${agy_success_hook}${success_hook_extra:+
 $success_hook_extra}"

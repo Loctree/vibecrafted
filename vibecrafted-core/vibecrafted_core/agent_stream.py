@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .telemetry import estimate_cost_usd
+from .telemetry import estimate_cost_usd, is_model_name
 
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 SESSION_PATTERN = re.compile(
@@ -24,7 +24,13 @@ TOKEN_PATTERN = re.compile(
     r"tokens:\s*([0-9]+)\s+in(?:\s*\(([0-9]+)\s+cached\))?\s*/\s*([0-9]+)\s+out",
     re.IGNORECASE,
 )
-MODEL_PATTERN = re.compile(r"model:\s*([^\s]+)", re.IGNORECASE)
+# Plain `model: X` is prose. Only a timestamped provider header names the model,
+# and only when it starts a line after ANSI stripping and leading whitespace.
+# A header quoted mid-sentence, or after `>`, is prose. Same anchor as spawn.py.
+TIMESTAMPED_MODEL_PATTERN = re.compile(
+    r"(?m)^[^\S\r\n]*\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]\s+model:[ \t]*([^\r\n]*)$",
+    re.IGNORECASE,
+)
 MODEL_ENV_VARS = (
     "VIBECRAFTED_PARENT_MODEL",
     "CLAUDE_MODEL",
@@ -37,11 +43,6 @@ MODEL_ENV_VARS = (
     "COPILOT_MODEL",
     "CURSOR_MODEL",
     "OMP_MODEL",
-)
-MODEL_PLACEHOLDERS = {"", "none", "null", "unknown", "pending"}
-COST_PATTERNS = (
-    re.compile(r"cost(?:_usd)?\s*[:=]\s*\$?([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE),
-    re.compile(r"\$([0-9]+\.[0-9]+)\s*(?:usd)?", re.IGNORECASE),
 )
 GROK_IGNORABLE_TRANSPORT_ERROR = "worker quit with fatal: Transport channel closed"
 # Every provider spelling of a token count. A usage dict carrying none of these
@@ -64,6 +65,35 @@ _USAGE_KEYS = (
     "outputTokens",
     "completion_tokens",
 )
+# A tool payload is the agent's own text. Nothing inside it is telemetry.
+# Same set as spawn._TOOL_PAYLOAD_KEYS; kept here so the two modules do not import each other.
+_TOOL_PAYLOAD_KEYS = frozenset(
+    {
+        "input",
+        "arguments",
+        "args",
+        "parameters",
+        "tool_input",
+        "tool_call",
+        "toolCall",
+    }
+)
+_MODEL_USAGE_KEYS = frozenset({"modelUsage", "model_usage"})
+
+
+def _telemetry_children(key: str, value: object) -> tuple[dict[str, Any], ...]:
+    """Dicts under ``key`` that may still carry a model or a cost.
+
+    Walk dicts. Enter a list only under ``modelUsage`` / ``model_usage``.
+    Never enter a tool payload.
+    """
+    if key in _TOOL_PAYLOAD_KEYS:
+        return ()
+    if key in _MODEL_USAGE_KEYS and isinstance(value, list):
+        return tuple(item for item in value if isinstance(item, dict))
+    if isinstance(value, dict):
+        return (value,)
+    return ()
 
 
 def stamp() -> str:
@@ -291,9 +321,9 @@ def _as_float(value: Any) -> float | None:
 
 
 def _clean_model(value: object) -> str:
-    """Stringify ``value`` and blank out known placeholder tokens (e.g. "none", "unknown")."""
+    """Return a real model label, or "" when ``value`` is missing or not a model."""
     raw = str(value or "").strip()
-    return "" if raw.lower() in MODEL_PLACEHOLDERS else raw
+    return raw if is_model_name(raw) else ""
 
 
 def _command_model(command: Sequence[str] | None) -> str:
@@ -379,6 +409,9 @@ class AgentStreamParser:
         # Final assistant answer of a stream that reports one (agy
         # `result.response`; kimi content; omp authoritative message_end).
         self.final_response: str = ""
+        # Why the provider ended the turn before finishing it; empty when the
+        # turn ran to completion or the stream never said.
+        self.incomplete_reason: str = ""
         self._omp_text_buffer = ""
         self._omp_text_streamed = False
         self._tool_burst: list[_ToolNote] = []
@@ -416,8 +449,8 @@ class AgentStreamParser:
     def feed_line(self, chunk: bytes) -> str:
         """Decode one line of agent output and render it to human-readable text.
 
-        Non-JSON lines fall through to plain-text scanning for session/token/
-        model/cost markers; JSON lines dispatch to the agent-specific formatter.
+        Non-JSON lines fall through to plain-text scanning for session, token,
+        and timestamped model headers. A cost is read only from a JSON event.
         """
         text = chunk.decode("utf-8", errors="replace")
         if self.agent == "grok" and is_grok_ignorable_transport_error(text):
@@ -462,7 +495,12 @@ class AgentStreamParser:
         return f"cd {root_text} && vc-resume --session {session}"
 
     def _scan_text(self, text: str) -> None:
-        """Regex-scan a plain-text (non-JSON) line for session id, tokens, model, cost."""
+        """Scan a plain-text line for session id, tokens, and a timestamped model.
+
+        Cost is never taken from prose. A model is taken only from
+        ``[HH:MM:SS] model: X`` after ANSI stripping, and only when X is a
+        real model name. A later invalid header does not clear a known model.
+        """
         clean = ANSI_PATTERN.sub("", text or "")
         session_matches = SESSION_PATTERN.findall(clean)
         if session_matches:
@@ -472,49 +510,54 @@ class AgentStreamParser:
             self.tokens_cached_input += int(raw_cached or 0)
             self.tokens_output += int(raw_out)
             self.usage_events += 1
-        model_matches = MODEL_PATTERN.findall(clean)
-        if model_matches:
-            self.model_id = model_matches[-1]
-        for pattern in COST_PATTERNS:
-            matches = pattern.findall(clean)
-            if matches:
-                self.cost_usd = _as_float(matches[-1])
-                if self.cost_usd is not None:
-                    self.cost_source = "provider_reported"
+        for match in TIMESTAMPED_MODEL_PATTERN.finditer(clean):
+            candidate = match.group(1).strip()
+            if is_model_name(candidate):
+                self.model_id = candidate
+
+    def _take_model(self, value: object) -> bool:
+        """Store ``value`` when it is a real model name. Invalid text does not stick."""
+        if not isinstance(value, str):
+            return False
+        text = value.strip()
+        if not is_model_name(text):
+            return False
+        self.model_id = text
+        return True
 
     def _record_model(self, event: dict[str, Any]) -> None:
-        """Capture the first model id found in ``event`` (recursing into nested dicts).
+        """Capture the first real model id in ``event``.
 
-        No-op once ``self.model_id`` is already set — first sighting wins.
+        No-op once ``self.model_id`` is already set — first valid sighting wins.
+        An invalid string does not occupy the slot, so a later valid field can.
+        Tool payloads are not entered. A list is entered only under modelUsage.
         """
-        if self.model_id:
+        if self.model_id or not isinstance(event, dict):
             return
         for key in ("model", "model_id", "modelId", "model_name", "modelName"):
-            value = event.get(key)
-            if isinstance(value, str) and value.strip():
-                self.model_id = value.strip()
+            if self._take_model(event.get(key)):
                 return
         message = event.get("message")
         if isinstance(message, dict):
             for key in ("model", "model_id", "modelId", "model_name", "modelName"):
-                value = message.get(key)
-                if isinstance(value, str) and value.strip():
-                    self.model_id = value.strip()
+                if self._take_model(message.get(key)):
                     return
         model_usage = event.get("modelUsage") or event.get("model_usage")
-        if isinstance(model_usage, dict) and model_usage:
-            self.model_id = str(next(iter(model_usage)))
+        if (
+            isinstance(model_usage, dict)
+            and model_usage
+            and self._take_model(next(iter(model_usage)))
+        ):
             return
         if isinstance(model_usage, list):
             for item in model_usage:
-                if isinstance(item, dict):
-                    value = item.get("model") or item.get("model_id")
-                    if isinstance(value, str) and value.strip():
-                        self.model_id = value.strip()
-                        return
-        for value in event.values():
-            if isinstance(value, dict):
-                self._record_model(value)
+                if isinstance(item, dict) and self._take_model(
+                    item.get("model") or item.get("model_id")
+                ):
+                    return
+        for key, value in event.items():
+            for child in _telemetry_children(key, value):
+                self._record_model(child)
                 if self.model_id:
                     return
 
@@ -573,10 +616,12 @@ class AgentStreamParser:
             self.cost_source = "provider_reported"
 
     def _record_nested_telemetry(self, event: dict[str, Any]) -> None:
-        """Walk ``event`` for modelUsage/usage/cost at any nesting depth (junie/grok shapes).
+        """Walk ``event`` for modelUsage/usage/cost (junie/grok shapes).
 
-        Falls back to :func:`estimate_cost_usd` when no provider-reported
-        cost was found, so telemetry never stays silently unset.
+        Dicts are walked. A list is entered only under modelUsage, and only
+        by the list arm above — those items are not queued again. Tool
+        payloads are not entered. Falls back to :func:`estimate_cost_usd`
+        when no provider-reported cost was found.
         """
         self._record_model(event)
         pending: list[dict[str, Any]] = [event]
@@ -595,9 +640,10 @@ class AgentStreamParser:
             if isinstance(usage, dict):
                 self._record_usage(usage)
             self._record_cost(current)
-            for value in current.values():
-                if isinstance(value, dict):
-                    pending.append(value)
+            for key, value in current.items():
+                if key in _MODEL_USAGE_KEYS and isinstance(value, list):
+                    continue
+                pending.extend(_telemetry_children(key, value))
         if self.cost_usd is None or (self.cost_source or "").startswith("estimated:"):
             self.cost_usd, self.cost_source = estimate_cost_usd(
                 self.model_id,
@@ -672,10 +718,12 @@ class AgentStreamParser:
             message = event.get("message")
             if not isinstance(message, dict) or message.get("role") != "assistant":
                 return ""
-            provider = str(message.get("provider") or "")
-            model = str(message.get("model") or "")
+            provider = str(message.get("provider") or "").strip()
+            model = str(message.get("model") or "").strip()
             if model:
-                self.model_id = f"{provider}/{model}" if provider else model
+                candidate = f"{provider}/{model}" if provider else model
+                if is_model_name(candidate):
+                    self.model_id = candidate
             if event_type == "message_start":
                 self._omp_text_buffer = ""
                 self._omp_text_streamed = False
@@ -761,7 +809,7 @@ class AgentStreamParser:
         if not isinstance(data, dict):
             data = event
         if kind == "session.start":
-            self.model_id = str(data.get("selectedModel") or self.model_id)
+            self._take_model(data.get("selectedModel"))
             session = str(data.get("sessionId") or "")
             return self._session_banner(session)
         if kind == "result":
@@ -770,10 +818,10 @@ class AgentStreamParser:
             # but is not emitted on stdout by Copilot CLI 1.0.89-7.
             return self._session_banner(str(event.get("sessionId") or ""))
         if kind == "session.model_change":
-            self.model_id = str(data.get("newModel") or self.model_id)
+            self._take_model(data.get("newModel"))
             return ""
         if kind == "assistant.message":
-            self.model_id = str(data.get("model") or self.model_id)
+            self._take_model(data.get("model"))
             content = data.get("content")
             if isinstance(content, str) and content.strip():
                 self.final_response = content
@@ -793,7 +841,7 @@ class AgentStreamParser:
                 for model, metric in metrics.items():
                     if not isinstance(metric, dict):
                         continue
-                    self.model_id = str(model)
+                    self._take_model(model)
             # modelMetrics is cumulative over the native session. A resumed
             # run cannot attribute that total to this invocation. The
             # harness-usage adapter checks the full session window first.
@@ -1122,6 +1170,15 @@ class AgentStreamParser:
             error = _stringish(result.get("error"))
             if error and error != "None":
                 out += f"\x1b[31m[{stamp()} error] {error}\x1b[0m\n"
+            # agy reports status SUCCESS and exits 0 when its print limit cuts
+            # the turn; finished_reason is the only field that says so.
+            if str(result.get("finished_reason") or "") == "print_timeout":
+                self.incomplete_reason = "print_timeout"
+                out += (
+                    f"\x1b[31m[{stamp()} error] the print limit cut this turn before"
+                    " it finished; the response is partial\x1b[0m\n"
+                )
+                status = "INCOMPLETE (print_timeout)"
             color = "32" if status.upper() == "SUCCESS" else "31"
             return self._emit(out + f"\x1b[{color}m[{stamp()}] {status}\x1b[0m\n")
         if kind == "error":
@@ -1272,6 +1329,9 @@ def filter_stream(
     the agent reports one (agy ``result.response``; kimi's last assistant
     ``content``; omp ``message_end`` text); it is left absent otherwise so
     callers can fall back to the transcript.
+
+    Returns 1 when the provider cut the turn short (``incomplete_reason``),
+    0 otherwise.
     """
     import sys as _sys
 
@@ -1308,7 +1368,9 @@ def filter_stream(
         last_path = Path(last_message_file).expanduser()
         last_path.parent.mkdir(parents=True, exist_ok=True)
         last_path.write_text(parser.final_response, encoding="utf-8")
-    return 0
+    # A turn the provider cut short is not a completed turn. A shell launcher
+    # running this filter under pipefail takes its failure path on it.
+    return 1 if parser.incomplete_reason else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

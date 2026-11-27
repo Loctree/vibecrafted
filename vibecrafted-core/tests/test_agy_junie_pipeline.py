@@ -52,8 +52,6 @@ def test_supervisor_defaults_and_sandbox_support_cover_agy_junie_grok() -> None:
         "agy",
         "--add-dir",
         ".",
-        "--print-timeout",
-        "30m",
         "--print",
         "go",
     ]

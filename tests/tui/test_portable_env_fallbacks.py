@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from vibecrafted_core.external_products import FRAME_MIN
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FOUNDATIONS_SCRIPT = REPO_ROOT / "scripts" / "install-foundations.sh"
 BASE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
@@ -45,8 +47,9 @@ def test_install_foundations_check_falls_back_to_home_without_vibecrafted_root(
         text=True,
     )
 
-    assert str(home / ".local" / "share" / "vibecrafted" / "bin") in result.stdout
-    assert str(home / ".local" / "bin") in result.stdout
+    # G2: the banner naming both bins is stderr; plan lines stay on stdout.
+    assert str(home / ".local" / "share" / "vibecrafted" / "bin") in result.stderr
+    assert str(home / ".local" / "bin") in result.stderr
     assert (
         "Would install Loctree from npm: npm install -g @loctree/loctree"
         in result.stdout
@@ -69,13 +72,22 @@ def test_install_foundations_default_treats_agent_cli_bootstrap_as_best_effort(
         # aicx_ready probes BOTH binaries; without a fake `aicx` the aicx leg
         # (a channel foundation, hard-fail by default) turns red on hosts
         # without a real aicx on BASE_PATH and hides this test's actual
-        # subjects: the cockpit defer and the best-effort agents leg.
+        # subject: the best-effort agents leg.
         "aicx",
         "aicx-mcp",
-        "vc-frame",
         "node",
     ):
         _write_fake_command(fake_bin, command)
+    # The S2 resolver admits a PATH vc-frame by its --version. Off macOS that
+    # is the whole proof, so a compatible fake keeps this test off the network
+    # (macOS also demands the Developer ID signature a fake cannot carry).
+    _write_fake_command(
+        fake_bin,
+        "vc-frame",
+        "#!/usr/bin/env bash\n"
+        f'[[ "${{1:-}}" == "--version" ]] && echo "vc-frame {".".join(map(str, FRAME_MIN))}"\n'
+        "exit 0\n",
+    )
     _write_fake_command(
         fake_bin,
         "npm",
@@ -103,13 +115,10 @@ def test_install_foundations_default_treats_agent_cli_bootstrap_as_best_effort(
     )
 
     combined = result.stdout + result.stderr
-    # vc-frame is externally released — and today its repo has no release,
-    # so the default spine must DEFER a failed cockpit install with a loud
-    # warn instead of killing the whole bootstrap (REQUIRE_FOUNDATIONS=1
-    # re-arms the hard gate). The agents leg stays best-effort: its failure
-    # is the warn line below, never the exit code.
+    # The agents leg stays best-effort: its failure is the warn line below,
+    # never the exit code. (vc-frame has a public channel since 09649c28: a
+    # real run provisions or admits it, and the cockpit check is --check only.)
     assert result.returncode == 0, combined
-    assert "cockpit" in combined
     assert (
         "agent CLIs incomplete — optional, install later: vibecrafted doctor"
         in combined
@@ -149,4 +158,5 @@ def test_install_foundations_explicit_agents_target_fails_when_bootstrap_fails(
     )
 
     assert result.returncode == 1
-    assert "Agent CLIs:" in result.stdout
+    # G2: warnings, including this summary, are stderr.
+    assert "Agent CLIs:" in result.stderr

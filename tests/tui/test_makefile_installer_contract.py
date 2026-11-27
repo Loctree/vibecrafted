@@ -1403,37 +1403,6 @@ def test_foundations_product_binaries_come_from_npm_only() -> None:
     assert "npm install -g $AICX_NPM_PACKAGE" in aicx_block
 
 
-@pytest.mark.parametrize("available", [True, False])
-def test_foundations_frame_check_requires_explicit_pack_repair(
-    tmp_path: Path, available: bool
-) -> None:
-    text = (REPO_ROOT / "scripts/install-foundations.sh").read_text()
-    body = (
-        "install_vcframe() {"
-        + text.split("install_vcframe() {", 1)[1].split("\n}\n", 1)[0]
-        + "\n}\n"
-    )
-    script = (
-        f"verify_vcframe_cockpit() {{ return {0 if available else 1}; }}\nwarn() {{ printf '%s\\n' \"$@\"; }}\n"
-        + body
-        + "install_vcframe\n"
-    )
-    before = set(tmp_path.iterdir())
-    result = subprocess.run(
-        ["bash", "-c", script],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == (0 if available else 1)
-    if not available:
-        assert (
-            "make install" in result.stdout and "verified Runtime Pack" in result.stdout
-        )
-    assert set(tmp_path.iterdir()) == before
-
-
 def test_foundations_never_overwrite_uv_owned_python_entrypoints() -> None:
     text = (REPO_ROOT / "scripts" / "install-foundations.sh").read_text(
         encoding="utf-8"
@@ -1943,7 +1912,7 @@ def _mock_pack_repo(tmp_path: Path, *, body: str) -> Path:
     for tool in ("rustc", "cargo"):
         binary = toolchain / tool
         binary.write_text(
-            f"#!/bin/sh\nprintf '%s\\n' '{tool} 1.96.0 (fixture)'\n",
+            f"#!/bin/sh\nprintf '%s\\n' '{tool} 1.97.0 (fixture)'\n",
             encoding="utf-8",
         )
         binary.chmod(0o755)
@@ -2039,11 +2008,11 @@ def test_make_runtime_pack_reports_the_path_the_builder_recorded(
     result = _make_runtime_pack(repo)
 
     assert result.returncode == 0, result.stderr
-    assert "Release prerequisites ready: Rust 1.96.0" in result.stdout
+    assert "Release prerequisites ready: Rust 1.97.0" in result.stdout
     calls = (repo / "mock-toolchain/calls").read_text(encoding="utf-8")
     for tool in ("rustc", "cargo"):
-        assert f"which --toolchain 1.96.0 {tool}" in calls
-    assert "target list --installed --toolchain 1.96.0" in calls
+        assert f"which --toolchain 1.97.0 {tool}" in calls
+    assert "target list --installed --toolchain 1.97.0" in calls
     printed = result.stdout.strip().splitlines()[-1]
     assert printed == str(
         repo
@@ -2201,7 +2170,7 @@ def test_release_prereqs_verifies_provisioned_rust_binaries(
         timeout=20,
     )
     assert (
-        "toolchain install 1.96.0 --profile minimal"
+        "toolchain install 1.97.0 --profile minimal"
         in (toolchain / "calls").read_text()
     )
     assert "unchanged (error reading rustc version)" in result.stdout

@@ -32,8 +32,40 @@ _vetcoders_vc_frame_developer_mode() {
 _vetcoders_vc_frame_missing_message() {
   local owner_root
   owner_root="$(_vetcoders_vc_frame_owner_root)" || return 1
+  # A Darwin Runtime Pack is never repaired by reinstalling it: the engine is
+  # an external product, and its resolver names the real cause.
+  ! _vetcoders_product_engine_external_reason "$owner_root" frame || return 0
   printf 'vc-frame: installed product entry/engine missing under: %s/{bin,libexec}/vc-frame\n' "$owner_root" >&2
   printf 'Install explicitly: python3 <checkout>/scripts/vetcoders_install.py runtime-install --payload-root <Runtime-Pack>\n' >&2
+}
+
+# Whether the engine behind a product entry is there, asked the way the entry
+# itself asks. On Darwin vc-frame and vc-terminal are independent signed
+# products: bin/vc-frame and bin/vc-terminal exec what the generation's
+# external product resolver returns and never read libexec, and the installer
+# refuses a generation that stages an engine there. Elsewhere the engine is
+# generation-local under libexec.
+_vetcoders_product_engine_present() {
+  local owner_root="$1" product="$2" engine
+  if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]]; then
+    "$owner_root/bin/python3" -I -B \
+      "$owner_root/vibecrafted-core/vibecrafted_core/external_products.py" \
+      "$product" >/dev/null
+    return $?
+  fi
+  engine="$owner_root/libexec/vc-$product"
+  [[ ! -L "$engine" && -f "$engine" && -x "$engine" ]]
+}
+
+# Print why a Darwin generation's external product is unavailable. Returns 0
+# only when that resolver exists and refused, so the caller can skip the
+# Runtime Pack advice that does not apply.
+_vetcoders_product_engine_external_reason() {
+  local owner_root="$1" product="$2" resolver
+  [[ "$(uname -s 2>/dev/null)" == "Darwin" ]] || return 1
+  resolver="$owner_root/vibecrafted-core/vibecrafted_core/external_products.py"
+  [[ -f "$resolver" && ! -L "$resolver" && -x "$owner_root/bin/python3" ]] || return 1
+  ! "$owner_root/bin/python3" -I -B "$resolver" "$product" >/dev/null
 }
 
 _vetcoders_vc_frame_bin() {
@@ -44,7 +76,7 @@ _vetcoders_vc_frame_bin() {
     [[ -n "$bin" ]] || bin="$(command -v vc-frame 2>/dev/null || true)"
   else
     bin="$owner_root/bin/vc-frame"
-    if [[ -L "$bin" || -L "$owner_root/libexec/vc-frame" || ! -f "$owner_root/libexec/vc-frame" || ! -x "$owner_root/libexec/vc-frame" ]]; then
+    if [[ -L "$bin" ]] || ! _vetcoders_product_engine_present "$owner_root" frame 2>/dev/null; then
       _vetcoders_vc_frame_missing_message
       return 1
     fi
@@ -85,6 +117,10 @@ _vetcoders_require_vc_frame() {
 _vetcoders_vc_terminal_missing_message() {
   local owner_root
   owner_root="$(_vetcoders_vc_frame_owner_root)" || return 1
+  if _vetcoders_product_engine_external_reason "$owner_root" terminal; then
+    printf 'A non-interactive caller has no PTY, so Vibecrafted must open its own terminal host.\n' >&2
+    return 0
+  fi
   printf 'vc-terminal: installed product entry/engine missing under: %s/{bin,libexec}/vc-terminal\n' \
     "$owner_root" >&2
   printf 'A non-interactive caller has no PTY, so Vibecrafted must open its own terminal host.\n' >&2
@@ -94,11 +130,10 @@ _vetcoders_vc_terminal_missing_message() {
 # Strict twin of _vetcoders_vc_frame_bin: entry AND engine must be real,
 # executable, non-symlink files inside the generation that loaded this shell.
 _vetcoders_vc_terminal_bin() {
-  local owner_root bin engine
+  local owner_root bin
   owner_root="$(_vetcoders_vc_frame_owner_root)" || return 1
   bin="$owner_root/bin/vc-terminal"
-  engine="$owner_root/libexec/vc-terminal"
-  if [[ -L "$bin" || -L "$engine" || ! -f "$engine" || ! -x "$engine" ]]; then
+  if [[ -L "$bin" ]] || ! _vetcoders_product_engine_present "$owner_root" terminal 2>/dev/null; then
     return 1
   fi
   if [[ "$bin" == /* && -f "$bin" && -x "$bin" ]]; then

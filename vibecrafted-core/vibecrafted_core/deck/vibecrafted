@@ -5332,7 +5332,7 @@ cmd_help() {
   printf '  %binit%b [agent]         Orient an agent in this repo\n' "$_cyan" "$_reset"
   printf '  %b<skill> <agent>%b      Run a workflow with an agent\n' "$_cyan" "$_reset"
   printf '  %bresume%b <agent>       Continue a stopped run or a provider session\n' "$_cyan" "$_reset"
-  printf '  %bfork%b <agent>         Branch a provider session (--session | --run-id) into a new one; claude, codex, grok\n' "$_cyan" "$_reset"
+  printf '  %bfork%b <agent>         Branch a provider session (--session | --run-id) into a new one; claude, codex, grok, kimi\n' "$_cyan" "$_reset"
   printf '  %bobserve%b <agent>      Check a run report or transcript\n' "$_cyan" "$_reset"
   printf '  %bawait%b <agent>        Wait for a run to settle\n' "$_cyan" "$_reset"
   printf '  %bstop%b <agent>         Stop a tracked launcher process group\n' "$_cyan" "$_reset"

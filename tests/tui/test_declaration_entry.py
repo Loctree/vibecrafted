@@ -61,6 +61,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _generation_local_host import present_generation_local_host
 
 # The suite runs with --import-mode=importlib (pyproject), so a sibling test
 # module is not importable by name; load the shared scene by file.
@@ -129,6 +130,13 @@ FACES = {
 # reports a child that died with 2 as 0 (512 & 0xff). The wrapper's exit must
 # be the child's exit, or an entry killed by errexit looks like a launch.
 _PTY_SPAWN = "import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn("
+
+
+@pytest.fixture(autouse=True)
+def _generation_local_host(tmp_path, monkeypatch):
+    # The fixture generations carry their engines under libexec, the
+    # generation-local contract; see tests/_generation_local_host.py.
+    present_generation_local_host(monkeypatch, tmp_path)
 
 
 def _run_face(

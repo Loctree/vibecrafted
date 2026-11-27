@@ -1,10 +1,11 @@
-"""Loctree, AICX, PRView and ScreenScribe come from their own channels.
+"""Loctree, AICX, vc-frame, PRView and ScreenScribe come from their own channels.
 
 npm carries @loctree/loctree and @loctree/aicx, GitHub releases carry
-vetcoders/prview-rs, PyPI carries screenscribe. The Runtime Pack carried
-pinned copies from before those channels existed; agents never resolved them
-(runtime_paths.agent_tool_search_path strips the generation bin), so they only
-lagged their channels and blocked the platforms the channels do not publish.
+Loctree/vc-frame and vetcoders/prview-rs, PyPI carries screenscribe. The
+Runtime Pack carried pinned copies from before those channels existed; agents
+never resolved them (runtime_paths.agent_tool_search_path strips the
+generation bin), so they only lagged their channels and blocked the platforms
+the channels do not publish. vc-frame left the pack with Vibecrafted 4.6.0.
 """
 
 from __future__ import annotations
@@ -13,13 +14,17 @@ import hashlib
 import json
 import os
 import platform
+import plistlib
 import subprocess
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
 from vibecrafted_core import runtime_pack_contract
+
+from tests._apple_trust_fixture import doubled_products_source
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = REPO_ROOT / "scripts/install-foundations.sh"
@@ -493,6 +498,399 @@ def test_prview_never_overwrites_another_install_in_the_launcher_bin(
         )
 
 
+# --- vc-frame from its own GitHub release ---------------------------------------
+
+
+def _pinned_version(component: str) -> str:
+    components = json.loads(
+        (REPO_ROOT / "config/source-components.json").read_text(encoding="utf-8")
+    )
+    return components["components"][component]["version"]
+
+
+def _pinned_frame_version() -> str:
+    return _pinned_version("vc-frame")
+
+
+def _vcframe_release(
+    tmp_path: Path, *, checksum: str | None = None, version: str | None = None
+) -> str:
+    """A file:// release directory shaped like Loctree/vc-frame releases."""
+    target = {
+        ("Darwin", "arm64"): "aarch64-apple-darwin",
+        ("Darwin", "x86_64"): "x86_64-apple-darwin",
+        ("Linux", "x86_64"): "x86_64-unknown-linux-musl",
+        ("Linux", "aarch64"): "aarch64-unknown-linux-musl",
+    }.get((platform.system(), platform.machine()), "unpublished-host")
+    release = tmp_path / "frame-release"
+    staged = tmp_path / "frame-staged"
+    reported = version or _pinned_frame_version()
+    _executable(staged / "vc-frame", f"#!/bin/sh\necho 'vc-frame {reported}'\n")
+    release.mkdir()
+    asset = release / f"vc-frame-{target}.tar.gz"
+    with tarfile.open(asset, "w:gz") as archive:
+        archive.add(staged / "vc-frame", arcname="vc-frame")
+    digest = checksum or hashlib.sha256(asset.read_bytes()).hexdigest()
+    (release / f"{asset.name}.sha256").write_text(
+        f"{digest}  {asset.name}\n", encoding="utf-8"
+    )
+    return target
+
+
+def _run_frame_installer(
+    tmp_path: Path, path: list[Path] | None = None, **extra: str
+) -> subprocess.CompletedProcess[str]:
+    return _run_installer(
+        tmp_path,
+        "vc-frame",
+        path=path or [tmp_path / "bin"],
+        VCFRAME_RELEASE_BASE=f"file://{tmp_path / 'frame-release'}",
+        **extra,
+    )
+
+
+def _frame_store(tmp_path: Path) -> Path:
+    return tmp_path / "home/.local/share/vc-frame"
+
+
+def _trusting(tmp_path: Path, *frames: Path) -> dict[str, str]:
+    """Run the installer against a resolver that trusts these fixture frames.
+
+    On macOS the resolver admits a PATH ``vc-frame`` only with the Developer ID
+    signature; unsigned fixture scripts would never reach the branch a test
+    names. Only the listed paths are trusted; any other meets ``codesign``.
+    """
+    source = doubled_products_source(tmp_path / "trusted-source", trusted=frames)
+    return {"VIBECRAFTED_SOURCE": str(source)}
+
+
+def _last_stderr_line(result: subprocess.CompletedProcess[str]) -> str:
+    lines = [line for line in result.stderr.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def test_a_compatible_vc_frame_on_path_is_kept(tmp_path: Path) -> None:
+    _vcframe_release(tmp_path)
+    own = _executable(tmp_path / "bin/vc-frame", "#!/bin/sh\necho 'vc-frame 4.9.1'\n")
+
+    result = _run_frame_installer(
+        tmp_path, REQUIRE_FOUNDATIONS="0", **_trusting(tmp_path, own)
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert f"vc-frame already installed: {own.resolve()}" in output
+    assert not _frame_store(tmp_path).exists()
+    assert not (tmp_path / "home/.local/bin/vc-frame").exists()
+
+
+def test_a_vc_frame_asset_that_misses_its_sha256_is_refused(tmp_path: Path) -> None:
+    target = _vcframe_release(tmp_path, checksum="0" * 64)
+
+    result = _run_frame_installer(tmp_path)
+    output = result.stdout + result.stderr
+
+    # vc-frame is a carrier prerequisite: the refusal is final and its one
+    # actionable sentence is the last line on stderr.
+    assert result.returncode == 1, output
+    last = _last_stderr_line(result)
+    assert last.endswith("Resolve this refusal and retry Upgrade."), output
+    assert not (tmp_path / "home/.local/bin/vc-frame").exists()
+    assert not _frame_store(tmp_path).exists()
+    if target == "unpublished-host":
+        assert "publishes no release asset" in last
+    else:
+        assert "does not match its release .sha256" in last
+
+
+def test_a_matching_vc_frame_asset_still_needs_the_publishers_signature_on_macos(
+    tmp_path: Path,
+) -> None:
+    target = _vcframe_release(tmp_path)
+
+    result = _run_frame_installer(tmp_path, REQUIRE_FOUNDATIONS="0")
+    output = result.stdout + result.stderr
+    link = tmp_path / "home/.local/bin/vc-frame"
+
+    if target.endswith("apple-darwin"):
+        assert (
+            "is not io.vetcoders.vc-frame signed by Developer ID team MW223P3NPX"
+            in output
+        )
+        assert not link.exists()
+        assert not _frame_store(tmp_path).exists()
+    elif target != "unpublished-host":
+        # Linux carries no Developer ID; the .sha256 is the publisher check.
+        assert link.is_symlink(), output
+        installed = link.resolve()
+        assert installed.parent.parent == _frame_store(tmp_path).resolve()
+        assert installed.parent.name.startswith(_pinned_frame_version() + "-")
+        assert f"Installed vc-frame {_pinned_frame_version()}" in output
+    else:
+        assert "publishes no release asset" in output
+
+
+def test_an_incompatible_vc_frame_release_is_never_linked(tmp_path: Path) -> None:
+    target = _vcframe_release(tmp_path, version="5.0.0")
+
+    result = _run_frame_installer(tmp_path, REQUIRE_FOUNDATIONS="0")
+    output = result.stdout + result.stderr
+
+    assert not (tmp_path / "home/.local/bin/vc-frame").exists()
+    if target in {"x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"}:
+        assert "is not compatible with this runtime" in output
+
+
+def test_vc_frame_never_overwrites_another_install_in_the_launcher_bin(
+    tmp_path: Path,
+) -> None:
+    _vcframe_release(tmp_path)
+    foreign = _executable(
+        tmp_path / "home/.local/bin/vc-frame", "#!/bin/sh\necho 'vc-frame 4.3.3'\n"
+    )
+
+    # Trust the foreign file so its version, not its signature, is what refuses.
+    result = _run_frame_installer(
+        tmp_path,
+        path=[tmp_path / "home/.local/bin", tmp_path / "bin"],
+        **_trusting(tmp_path, foreign),
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert foreign.read_text(encoding="utf-8") == "#!/bin/sh\necho 'vc-frame 4.3.3'\n"
+    assert not foreign.is_symlink()
+    assert "belongs to another install; not overwriting it" in output
+    assert "incompatible vc-frame" in output
+
+
+@pytest.mark.skipif(
+    platform.system() != "Linux", reason="Darwin assets need the publisher signature"
+)
+def test_a_managed_vc_frame_link_moves_to_the_pinned_release(tmp_path: Path) -> None:
+    _vcframe_release(tmp_path)
+    old_store = _frame_store(tmp_path) / "4.5.0-000000000000"
+    old = _executable(old_store / "vc-frame", "#!/bin/sh\necho 'vc-frame 4.5.0'\n")
+    link = tmp_path / "home/.local/bin/vc-frame"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(old)
+
+    result = _run_frame_installer(
+        tmp_path, path=[link.parent, tmp_path / "bin"], REQUIRE_FOUNDATIONS="0"
+    )
+
+    assert link.is_symlink(), result.stdout + result.stderr
+    assert link.resolve() != old.resolve()
+    assert link.resolve().parent.name.startswith(_pinned_frame_version() + "-")
+    # The binary a running server started from is never removed.
+    assert old.read_text(encoding="utf-8") == "#!/bin/sh\necho 'vc-frame 4.5.0'\n"
+
+
+def test_check_mode_names_the_pinned_vc_frame_release(tmp_path: Path) -> None:
+    target = _vcframe_release(tmp_path)
+
+    check = _run_installer(
+        tmp_path,
+        "--check",
+        "vc-frame",
+        path=[tmp_path / "bin"],
+        VCFRAME_RELEASE_BASE=f"file://{tmp_path / 'frame-release'}",
+    )
+    output = check.stdout + check.stderr
+
+    assert check.returncode == 0, output
+    assert not (tmp_path / "home/.local/bin/vc-frame").exists()
+    if target != "unpublished-host":
+        assert (
+            f"Would install vc-frame {_pinned_frame_version()} from "
+            f"file://{tmp_path / 'frame-release'}/vc-frame-{target}.tar.gz" in output
+        )
+
+
+# --- vc-terminal from its own GitHub release (macOS) ----------------------------
+
+TERMINAL_ASSET = "vc-terminal-aarch64-apple-darwin.zip"
+
+
+def _terminal_state() -> str:
+    """How this host's fixed /Applications/vc-terminal.app answers the resolver.
+
+    The terminal path is a fixed admission constant with no test override, so
+    the installer's branch depends on the machine running the test.
+    """
+    if platform.system() != "Darwin":
+        return "not-macos"
+    if platform.machine() != "arm64":
+        return "unpublished-host"
+    resolved = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(REPO_ROOT / "vibecrafted-core/vibecrafted_core/external_products.py"),
+            "terminal",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if resolved.returncode == 0:
+        return "admitted"
+    return "occupied" if Path("/Applications/vc-terminal.app").exists() else "absent"
+
+
+def _vcterminal_release(tmp_path: Path, *, checksum: str | None = None) -> None:
+    """A file:// release directory with an unsigned app in the installer's ZIP."""
+    release = tmp_path / "terminal-release"
+    release.mkdir()
+    asset = release / TERMINAL_ASSET
+    info = plistlib.dumps(
+        {
+            "CFBundleIdentifier": "io.vetcoders.vc-terminal",
+            "CFBundleShortVersionString": _pinned_version("vc-terminal"),
+        }
+    )
+    with zipfile.ZipFile(asset, "w") as archive:
+        archive.writestr("vc-terminal.app/Contents/Info.plist", info)
+        archive.writestr(
+            "vc-terminal.app/Contents/MacOS/vc-terminal", "#!/bin/sh\nexit 0\n"
+        )
+    digest = checksum or hashlib.sha256(asset.read_bytes()).hexdigest()
+    (release / f"{TERMINAL_ASSET}.sha256").write_text(
+        f"{digest}  {TERMINAL_ASSET}\n", encoding="utf-8"
+    )
+
+
+def _run_terminal_installer(
+    tmp_path: Path, *args: str, **extra: str
+) -> subprocess.CompletedProcess[str]:
+    return _run_installer(
+        tmp_path,
+        *args,
+        "vc-terminal",
+        path=[tmp_path / "bin"],
+        VCTERMINAL_RELEASE_BASE=f"file://{tmp_path / 'terminal-release'}",
+        **extra,
+    )
+
+
+def _assert_terminal_branch(
+    result: subprocess.CompletedProcess[str], state: str, absent_message: str
+) -> None:
+    output = result.stdout + result.stderr
+    if state == "not-macos":
+        # A real run refuses the explicit target off macOS (5a8dfa61); install.sh
+        # names vc-terminal on macOS only, and --check reports "nothing to install".
+        assert result.returncode == 1, output
+        assert "vc-terminal requires macOS; omit this target on linux" in output
+        assert _last_stderr_line(result).endswith(
+            "Resolve this refusal and retry Upgrade."
+        ), output
+    elif state == "admitted":
+        assert "vc-terminal already installed" in output
+    elif state == "unpublished-host":
+        assert "vc-terminal publishes no build for macOS/" in output
+    elif state == "occupied":
+        # An existing unadmitted app belongs to the user: preserved, never replaced.
+        assert result.returncode == 1, output
+        assert "is not admitted and was preserved" in output
+        assert _last_stderr_line(result).endswith("retry Upgrade."), output
+    else:
+        assert result.returncode == 1, output
+        assert absent_message in output
+        assert _last_stderr_line(result).endswith(
+            "Resolve this refusal and retry Upgrade."
+        ), output
+        assert not Path("/Applications/vc-terminal.app").exists()
+
+
+def test_a_vc_terminal_asset_that_misses_its_sha256_is_refused(tmp_path: Path) -> None:
+    _vcterminal_release(tmp_path, checksum="0" * 64)
+
+    result = _run_terminal_installer(tmp_path)
+
+    _assert_terminal_branch(
+        result, _terminal_state(), "does not match its release .sha256"
+    )
+
+
+def test_a_matching_vc_terminal_asset_still_needs_the_publishers_signature(
+    tmp_path: Path,
+) -> None:
+    _vcterminal_release(tmp_path)
+
+    result = _run_terminal_installer(tmp_path)
+
+    _assert_terminal_branch(
+        result,
+        _terminal_state(),
+        "is not io.vetcoders.vc-terminal signed by Developer ID team MW223P3NPX",
+    )
+
+
+def test_a_linux_runtime_launcher_is_that_runtimes_own_frame(tmp_path: Path) -> None:
+    """Install (Linux Matrix), 2026-11-20 on: every fresh Linux install refused.
+
+    A Linux Runtime Pack carries the vc-frame engine (libexec) and publishes its
+    product-entry launcher in the launcher bin before foundations run. The
+    resolver skips runtime launchers by design, so vc-frame provisioning (the
+    default run since 09649c28, install.sh's explicit target since 5a8dfa61)
+    met the runtime's own frame as "another install". Off macOS that launcher
+    is the frame; on macOS the runtime publishes none, and the refusal stays.
+    """
+    _vcframe_release(tmp_path)
+    body = (
+        "#!/bin/bash\n"
+        f"export VIBECRAFTED_RUNTIME_ROOT={tmp_path / 'runtime/generation'}\n"
+        'exec "$VIBECRAFTED_RUNTIME_ROOT/bin/vc-frame" "$@"\n'
+    )
+    launcher = _executable(tmp_path / "home/.local/bin/vc-frame", body)
+
+    for system, machine in (("Linux", "x86_64"), ("Darwin", "arm64")):
+        fake = tmp_path / f"uname-{system}"
+        _executable(
+            fake / "uname",
+            f'#!/bin/sh\ncase "$1" in -s) echo {system} ;; -m) echo {machine} ;;'
+            ' *) /usr/bin/uname "$@" ;; esac\n',
+        )
+        result = _run_frame_installer(
+            tmp_path, path=[fake, tmp_path / "home/.local/bin", tmp_path / "bin"]
+        )
+        output = result.stdout + result.stderr
+        if system == "Linux":
+            assert result.returncode == 0, output
+            assert "vc-frame is carried by the Runtime Pack" in output
+            assert "belongs to another install" not in output
+        else:
+            assert result.returncode == 1, output
+            assert "belongs to another install; not overwriting it" in output
+        assert launcher.read_text(encoding="utf-8") == body
+        assert not _frame_store(tmp_path).exists()
+
+
+def test_the_default_macos_run_includes_vc_terminal(tmp_path: Path) -> None:
+    _vcterminal_release(tmp_path)
+
+    result = _run_installer(
+        tmp_path,
+        "--check",
+        path=[tmp_path / "bin"],
+        VCTERMINAL_RELEASE_BASE=f"file://{tmp_path / 'terminal-release'}",
+    )
+    output = result.stdout + result.stderr
+    state = _terminal_state()
+
+    assert not Path(str(tmp_path / "home/Applications")).exists()
+    if state == "not-macos":
+        assert "vc-terminal" not in output
+    elif state == "absent":
+        assert (
+            f"Would install vc-terminal {_pinned_version('vc-terminal')} from "
+            f"file://{tmp_path / 'terminal-release'}/{TERMINAL_ASSET}" in output
+        )
+    elif state == "admitted":
+        assert "vc-terminal already installed" in output
+
+
 # --- screenscribe from PyPI through pipx ---------------------------------------
 
 
@@ -658,7 +1056,8 @@ def test_uv_channel_failure_keeps_foundation_admission_explicit(
         tmp_path, "screenscribe", path=[fake_bin], REQUIRE_FOUNDATIONS=required
     )
     assert (result.returncode == 0) == (required == "0")
-    assert "uv failed to install screenscribe from PyPI." in result.stdout
+    # Diagnostics belong on stderr; stdout stays free for machine readers.
+    assert "uv failed to install screenscribe from PyPI." in result.stderr
 
 
 def test_the_default_run_refuses_a_missing_foundation(tmp_path: Path) -> None:
@@ -794,7 +1193,11 @@ def test_runtime_install_retains_early_failure_evidence(tmp_path: Path) -> None:
 def test_canonical_frame_config_passes_strict_cockpit_gate(
     tmp_path: Path, missing: str | None
 ) -> None:
-    """The shipped Frame-owned layout contract must survive strict install."""
+    """The shipped Frame-owned layout contract must pass the cockpit inspection.
+
+    Real provisioning ends at resolver admission, before the runtime publishes
+    its configuration; the cockpit inspection is the ``--check`` report.
+    """
     source = REPO_ROOT / "vibecrafted-core/vibecrafted_core/config/vc-frame"
     config = tmp_path / "home/.config/vibecrafted/vc-frame"
     for name in ("config.kdl", "vc-composer.sh", "layouts/operator.kdl"):
@@ -809,17 +1212,24 @@ def test_canonical_frame_config_passes_strict_cockpit_gate(
     elif missing:
         (config / missing).unlink()
     fake_bin = tmp_path / "bin"
-    _executable(fake_bin / "vc-frame", "#!/bin/sh\necho 'vc-frame 4.3.3'\n")
+    frame = _executable(fake_bin / "vc-frame", "#!/bin/sh\necho 'vc-frame 4.6.0'\n")
     _executable(fake_bin / "vc-start")
 
     result = _run_installer(
-        tmp_path, "vc-frame", path=[fake_bin], REQUIRE_FOUNDATIONS="1"
+        tmp_path,
+        "--check",
+        "vc-frame",
+        path=[fake_bin],
+        REQUIRE_FOUNDATIONS="1",
+        **_trusting(tmp_path, frame),
     )
+    output = result.stdout + result.stderr
 
+    assert result.returncode == 0, output
+    assert f"vc-frame already installed: {frame.resolve()}" in output
     if missing:
-        assert result.returncode == 1, result.stdout + result.stderr
-        assert "required foundation failed: vc-frame" in result.stderr
+        assert "cockpit: NOT READY" in result.stderr, output
+        assert "cockpit: READY" not in result.stdout
     else:
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert "cockpit: READY" in result.stdout
+        assert "cockpit: READY" in result.stdout, output
         assert "cockpit: Launchpad layout" in result.stdout

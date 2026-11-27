@@ -9,8 +9,8 @@
 # Alacritty does not expand ${HOME} in [terminal].shell.program; the private
 # config is not a product surface.
 #
-# macOS terminal bytes execute inside the fixed /Applications/Vibecrafted.app
-# main bundle. Generations remain internal; Linux uses the flat native host.
+# macOS resolves the independently signed /Applications/vc-terminal.app.
+# Linux retains the generation-local native host.
 #
 # 𝚅𝚒𝚋𝚎𝚌𝚛𝚊𝚏𝚝𝚎𝚍. with AI Agents by Vetcoders (c)2024-2026 LibraxisAI
 set -euo pipefail
@@ -94,36 +94,20 @@ _vc_terminal_sanitize_inherited_path() {
   export PATH
 }
 
-_vc_terminal_is_bundle_host() {
-  local candidate="${1:-}" bundle=/Applications/Vibecrafted.app
-  [[ "$candidate" == "$bundle/Contents/MacOS/vc-terminal" ]] || return 1
-  [[ -f "$candidate" && -x "$candidate" && ! -L "$candidate" ]] || return 1
-  [[ ! -L "$bundle" && ! -L "$bundle/Contents" && ! -L "$bundle/Contents/MacOS" ]] || return 1
-  [[ -f "$bundle/Contents/Info.plist" && ! -L "$bundle/Contents/Info.plist" ]] || return 1
-  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Contents/Info.plist" 2>/dev/null)" == "io.vetcoders.vibecrafted" ]] || return 1
-  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$bundle/Contents/Info.plist" 2>/dev/null)" == "Vibecrafted" ]] || return 1
-}
-
 _vc_terminal_select_host() {
-  local fallback="$1" candidate=/Applications/Vibecrafted.app/Contents/MacOS/vc-terminal
+  local fallback="$1"
   [[ "$(/usr/bin/uname -s)" == "Darwin" ]] || { printf '%s\n' "$fallback"; return 0; }
-  if _vc_terminal_is_bundle_host "$candidate"; then
-    printf '%s\n' "$candidate"
-    return 0
-  fi
-  printf 'vc-terminal: fixed signed host missing at /Applications/Vibecrafted.app; install the reviewed notarized app before opening a terminal.\n' >&2
-  return 78
+  "$root/bin/python3" -I -B "$root/vibecrafted-core/vibecrafted_core/external_products.py" terminal
 }
 
 _vc_terminal_sanitize_inherited_path
-if [[ "$native_host" != /* || ! -x "$native_host" || -L "$native_host" || -L "$root/libexec" ]]; then
+if [[ "$(/usr/bin/uname -s)" != "Darwin" ]] && [[ "$native_host" != /* || ! -x "$native_host" || -L "$native_host" || -L "$root/libexec" ]]; then
   printf 'vc-terminal: native host missing: %s\n' "$native_host" >&2
   exit 127
 fi
 host="$(_vc_terminal_select_host "$native_host")"
 unset -f _vc_terminal_runtime_home _vc_terminal_is_owned_generation_bin \
-  _vc_terminal_sanitize_inherited_path _vc_terminal_is_bundle_host \
-  _vc_terminal_select_host
+  _vc_terminal_sanitize_inherited_path _vc_terminal_select_host
 
 export VIBECRAFTED_RUNTIME_ROOT="$root"
 export VIBECRAFTED_ROOT="$root"
@@ -131,7 +115,7 @@ export VIBECRAFTED_RUNTIME_BIN="$root/bin"
 export VIBECRAFTED_TERMINAL_HOST="$host"
 export XDG_CONFIG_HOME="$HOME/.config"
 export VIBECRAFTED_PYTHON="$root/bin/python3"
-export VIBECRAFTED_VC_FRAME_BIN="$root/libexec/vc-frame"
+
 export VC_FRAME_CONFIG_DIR="$HOME/.config/vibecrafted/vc-frame"
 unset VC_FRAME_CONFIG_FILE PYTHONPATH PYTHONHOME native_host
 # The runtime python pin: this terminal's python and python3 are the
@@ -168,6 +152,12 @@ if [[ $# -eq 1 ]]; then
       exec "$root/bin/python3" -B "$root/scripts/vetcoders_install.py" runtime-repair --json
       ;;
   esac
+fi
+if [[ "$(/usr/bin/uname -s)" == "Darwin" ]]; then
+  VIBECRAFTED_VC_FRAME_BIN="$("$root/bin/python3" -I -B "$root/vibecrafted-core/vibecrafted_core/external_products.py" frame)"
+  export VIBECRAFTED_VC_FRAME_BIN
+else
+  export VIBECRAFTED_VC_FRAME_BIN="$root/libexec/vc-frame"
 fi
 if [[ ! -f "$config" || -L "$config" || -L "$HOME/.config" \
   || -L "$HOME/.config/vibecrafted" || -L "$HOME/.config/vibecrafted/vc-terminal" ]]; then
@@ -216,6 +206,10 @@ for argument in "$@"; do
         exit 2
       fi
       value_pending=true
+      ;;
+    --vibecrafted-hosted | --vibecrafted-hosted=*)
+      printf 'vc-terminal: the hosted application role is product-owned\n' >&2
+      exit 2
       ;;
     --option)
       value_pending=true
@@ -266,7 +260,12 @@ if [[ "$host" == */Contents/MacOS/vc-terminal && "$(/usr/bin/uname -s)" == "Darw
       || exit $?
     case "$admission" in
       reused) exit 0 ;;
-      fresh) exec "$host" --config-file "$config" ${host_tail[@]+"${host_tail[@]}"} ;;
+      fresh)
+        if [[ "$host" == */Vibecrafted.app/Contents/MacOS/vc-terminal ]]; then
+          exec "$host" --vibecrafted-hosted --config-file "$config" ${host_tail[@]+"${host_tail[@]}"}
+        fi
+        exec "$host" --config-file "$config" ${host_tail[@]+"${host_tail[@]}"}
+        ;;
     esac
     printf 'vc-terminal: unrecognized host admission: %s\n' "$admission" >&2
     exit 70

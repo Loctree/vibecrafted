@@ -928,7 +928,7 @@ init-hooks:
 		command -v uv >/dev/null 2>&1 || { echo "bootstrapping uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }; \
 		uvx "$$(bash scripts/lib/ruff-spec.sh)" --version >/dev/null 2>&1 || echo "  [warn] pinned ruff unavailable via uvx"; \
 		command -v semgrep >/dev/null 2>&1 || uvx semgrep --version >/dev/null 2>&1 || echo "  [warn] semgrep unavailable"; \
-		npx --yes prettier --version >/dev/null 2>&1 || echo "  [warn] prettier unavailable via npx"; \
+		npx --yes "$$(bash scripts/lib/prettier-spec.sh)" --version >/dev/null 2>&1 || echo "  [warn] pinned prettier unavailable via npx"; \
 	else \
 		true; \
 	fi

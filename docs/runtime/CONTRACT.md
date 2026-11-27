@@ -388,6 +388,10 @@ Keep the standard 𝚅𝚒𝚋𝚎𝚌𝚛𝚊𝚏𝚝𝚎𝚍. quality bar:
   this line, the config and the dev group equal. A bump changes all three
   together. A bare `uvx ruff` resolves the host's cached version, so its result
   is not evidence for or against the gate
+- prettier runs at one pinned version, `prettier@3.9.0`, written once in
+  `scripts/lib/prettier-spec.sh`; the hooks and `make init-hooks` read it there.
+  A bare `npx prettier` resolves whatever is newest, so its result is not
+  evidence for or against the gate
 - Rust repos: `cargo clippy -- -D warnings`
 - Non-Rust repos: choose the closest equivalent lint/type/test gate
 - Tests: run if reviewing; write if implementing new behavior; prefer real e2e coverage for the actual pipeline

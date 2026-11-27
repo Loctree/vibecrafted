@@ -607,6 +607,16 @@ impl App {
         if let Some(loaded) = result.control_plane {
             self.apply_control_plane(loaded);
         }
+        if let Some(usage) = result.usage {
+            match usage {
+                Ok(usage) if usage != self.state.usage => {
+                    self.state.usage = usage;
+                    self.home_rows_memo.clear();
+                }
+                Ok(_) => {}
+                Err(error) => self.append_status(format!("usage unavailable: {error}")),
+            }
+        }
         let current_repo = result.repo == self.config.repo;
         if let Some(intents) = result.polarize {
             if current_repo {
@@ -671,6 +681,7 @@ impl App {
             }
         }
         self.home_rows_memo.clear();
+        self.refresh.rendered_at = Some(chrono::Utc::now());
         let mut runs = render_runs(&self.state);
         apply_run_filters(
             &mut runs,
@@ -694,14 +705,33 @@ impl App {
     /// Recompute only time-derived labels and filters from cached state.
     /// This keeps ages and stale classifications moving without re-reading
     /// the control-plane filesystem.
+    pub fn refresh_time_labels(&mut self, now: chrono::DateTime<chrono::Utc>) -> bool {
+        let Some(previous) = self.refresh.rendered_at else {
+            self.refresh.rendered_at = Some(now);
+            return false;
+        };
+        if !crate::state::time_labels_changed(&self.state, previous, now) {
+            return false;
+        }
+        self.home_rows_memo.clear();
+        self.refresh_rendered_runs_at(now);
+        true
+    }
+
     pub fn refresh_rendered_runs(&mut self) {
+        self.refresh_rendered_runs_at(chrono::Utc::now());
+    }
+
+    fn refresh_rendered_runs_at(&mut self, now: chrono::DateTime<chrono::Utc>) {
+        self.refresh.rendered_at = Some(now);
         let selected_run_id = self.selected_run().map(|run| run.snapshot.run_id.clone());
-        let mut runs = render_runs(&self.state);
-        apply_run_filters(
+        let mut runs = crate::state::render_runs_at(&self.state, now);
+        apply_run_filters_at(
             &mut runs,
             self.queue_scope,
             &self.search_query,
             &self.config.repo,
+            now,
         );
         self.runs = runs;
         if let Some(run_id) = selected_run_id
@@ -2574,7 +2604,22 @@ fn apply_run_filters(
     search_query: &str,
     workspace: &Path,
 ) {
-    let now = chrono::Utc::now();
+    apply_run_filters_at(
+        runs,
+        queue_scope,
+        search_query,
+        workspace,
+        chrono::Utc::now(),
+    );
+}
+
+fn apply_run_filters_at(
+    runs: &mut Vec<RenderedRun>,
+    queue_scope: QueueScope,
+    search_query: &str,
+    workspace: &Path,
+    now: chrono::DateTime<chrono::Utc>,
+) {
     let workspace_live = runs.iter().any(|run| {
         is_actionable_kind(run.kind, &run.snapshot, now)
             && workspace_matches(&run.snapshot, workspace)
@@ -2821,5 +2866,96 @@ mod home_rows_memo_tests {
             3,
             "a landed refresh drops the projection"
         );
+    }
+
+    fn home_app() -> super::App {
+        let mut app = crate::tests::sample_app();
+        let now = chrono::Utc::now();
+        app.state.runs = vec![
+            serde_json::from_value(serde_json::json!({
+                "run_id":"fixture", "state":"running", "agent":"codex", "root":app.config.repo,
+                "updated_at":now.to_rfc3339()
+            }))
+            .unwrap(),
+        ];
+        app.state.retained_runs = app.state.runs.clone();
+        app.state.usage = crate::usage::UsageDashboard::default();
+        app.refresh_rendered_runs();
+        app
+    }
+
+    fn pin_home_memo(app: &super::App) {
+        // A controlled fresh memo makes the invalidation test independent of
+        // the real one-second TTL and scheduler pauses on a busy build host.
+        app.home_rows_memo.0.borrow_mut().as_mut().unwrap().1 =
+            std::time::Instant::now() + std::time::Duration::from_secs(60);
+    }
+
+    #[test]
+    fn changed_usage_only_answer_refreshes_visible_home_cost_without_replacing_runs() {
+        let mut app = home_app();
+        assert_eq!(app.home_rows()[0].cost_label, "—");
+        pin_home_memo(&app);
+        let rows = app.runs.as_ptr();
+        let selected = app.selected_run().unwrap().snapshot.run_id.clone();
+        let mut usage = app.state.usage.clone();
+        usage.runs.push(crate::usage::UsageRun {
+            run_id: "fixture".into(),
+            provider: "codex".into(),
+            agent: "codex".into(),
+            model: "gpt-5".into(),
+            status: "running".into(),
+            timestamp: String::new(),
+            tokens_total: Some(51),
+            cost: crate::usage::UsageCost::Known {
+                amount: 0.45,
+                unit: "USD".into(),
+            },
+            cost_source: "provider_reported".into(),
+            failure: None,
+        });
+        let answer = |generation, result| crate::refresh::RefreshResult {
+            generation,
+            repo: std::path::PathBuf::from("/tmp/repo"),
+            control_plane: None,
+            usage: Some(result),
+            polarize: None,
+            mission_control: None,
+            memory: None,
+        };
+        app.apply_refresh(answer(1, Ok(usage.clone())));
+        assert_eq!(app.home_rows()[0].cost_label, "$0.4500");
+        pin_home_memo(&app);
+        app.apply_refresh(answer(2, Err("fixture read denied".into())));
+        assert!(
+            app.home_rows_memo.0.borrow().is_some(),
+            "failed reads retain the memo"
+        );
+        assert_eq!(app.home_rows()[0].cost_label, "$0.4500");
+        app.apply_refresh(answer(3, Ok(usage)));
+        assert!(
+            app.home_rows_memo.0.borrow().is_some(),
+            "identical usage does not invalidate idle rows"
+        );
+        assert_eq!(app.runs.as_ptr(), rows);
+        assert_eq!(app.selected_run().unwrap().snapshot.run_id, selected);
+    }
+
+    #[test]
+    fn temporal_label_changes_invalidate_home_memo_but_idle_ticks_keep_it() {
+        let mut app = home_app();
+        assert_eq!(app.home_rows().len(), 1);
+        pin_home_memo(&app);
+        let at = app.refresh.rendered_at.unwrap();
+        assert!(!app.refresh_time_labels(at));
+        assert!(app.home_rows_memo.0.borrow().is_some());
+        let state_rows = app.state.runs.as_ptr();
+        assert!(app.refresh_time_labels(at + chrono::Duration::minutes(1)));
+        assert_eq!(app.state.runs.as_ptr(), state_rows);
+        assert!(
+            app.home_rows_memo.0.borrow().is_none(),
+            "temporal projection inputs moved"
+        );
+        assert_eq!(app.home_rows().len(), 1);
     }
 }

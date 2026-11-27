@@ -2,14 +2,14 @@
   "schema": "vibecrafted.source-components.v1",
   "components": {
     "vc-frame": {
-      "repository": "https://github.com/vetcoders/vc-frame.git",
-      "version": "4.5.1",
-      "revision": "35165de453e42d8b3c7ac9488f5eae1957e134c8"
+      "repository": "https://github.com/Loctree/vc-frame.git",
+      "version": "4.6.0",
+      "revision": "1c7965a07035aac23c6631711b0f83cbabbb8797"
     },
     "vc-terminal": {
-      "repository": "https://github.com/vetcoders/vc-terminal.git",
-      "version": "0.18.0-dev",
-      "revision": "38ef2f918383ca4dde797d22869b619097c81d05"
+      "repository": "https://github.com/Loctree/vc-terminal.git",
+      "version": "0.18.0",
+      "revision": "83df7ac9107ab1a6ef9eef4e8ed8bdf0b7373f8d"
     }
   }
 }

@@ -310,3 +310,77 @@ def test_deck_accepts_action_first_resume_mode() -> None:
     assert result.returncode == 0
     assert "Unknown mode" not in result.stderr
     assert "--run-id" in result.stdout or "resume --run-id" in result.stdout
+
+
+def _finished_parent(tmp_path: Path) -> dict[str, Any]:
+    return {
+        "run_id": "work-261113-120010-20165",
+        "agent": "codex",
+        "skill": "workflow",
+        "state": "completed",
+        "status": "completed",
+        "root": str(tmp_path),
+        "runtime_class": "local-worktrees",
+        "model_requested": "gpt-6.1-terra",
+        "agent_session_id": "01a1d490-ab3b-7942-ac68-ea0ec393a589",
+        "exit_code": 0,
+    }
+
+
+def _stub_finished_parent(monkeypatch, parent: dict[str, Any]) -> dict[str, Any]:
+    monkeypatch.setattr(workflow, "lookup_run", lambda _run_id: dict(parent))
+    monkeypatch.setattr(workflow, "_native_resume_meta", lambda *_a, **_k: dict(parent))
+    monkeypatch.setattr(workflow, "_worker_process_alive", lambda _run: False)
+    monkeypatch.setattr(
+        workflow,
+        "resolve_run",
+        lambda _run_id: (_ for _ in ()).throw(workflow.RunNotResolved("x")),
+    )
+    seen: dict[str, Any] = {}
+
+    def fake_manual(
+        agent: str, agent_session_id: str, _source: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        seen.update({"agent": agent, "agent_session_id": agent_session_id, **kwargs})
+        return {"accepted": True, "run_id": "rsme-child", "agent": agent}
+
+    monkeypatch.setattr(workflow, "manual_resume_session", fake_manual)
+    return seen
+
+
+def test_operator_continue_run_continues_finished_run_on_explicit_prompt(
+    monkeypatch, tmp_path: Path
+) -> None:
+    parent = _finished_parent(tmp_path)
+    seen = _stub_finished_parent(monkeypatch, parent)
+
+    result = operator_continue_run(
+        parent["run_id"],
+        source_dir=tmp_path,
+        expected_agent="codex",
+        prompt="Kontynuuj prace nad zadaniem.",
+    )
+
+    assert result["accepted"] is True
+    assert result["resume_of"] == parent["run_id"]
+    assert seen["agent_session_id"] == parent["agent_session_id"]
+    assert Path(str(seen["root"])).resolve() == tmp_path.resolve()
+    assert seen["model"] == "gpt-6.1-terra"
+    assert seen["launch_meta"]["runtime_class"] == "local-worktrees"
+    assert "Kontynuuj prace nad zadaniem." in str(seen["prompt"])
+    assert "killed" not in str(seen["prompt"])
+
+
+def test_operator_continue_run_still_refuses_finished_run_without_input(
+    monkeypatch, tmp_path: Path
+) -> None:
+    parent = _finished_parent(tmp_path)
+    seen = _stub_finished_parent(monkeypatch, parent)
+
+    result = operator_continue_run(
+        parent["run_id"], source_dir=tmp_path, expected_agent="codex"
+    )
+
+    assert result["accepted"] is False
+    assert result["reason"] == "already_complete"
+    assert not seen

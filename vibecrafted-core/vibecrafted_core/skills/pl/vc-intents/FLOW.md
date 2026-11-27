@@ -1,6 +1,6 @@
 # Przepływ `vc-intents`
 
-## Flow
+## Przepływ
 
 ```mermaid
 flowchart TD
@@ -23,19 +23,19 @@ flowchart TD
 
 ## Trasy
 
-| Wejście                                   | Argumenty                                        | Produkuje                                               | Wyjście               |
-| ----------------------------------------- | ------------------------------------------------ | ------------------------------------------------------- | --------------------- |
-| `/vc-intents`                             | okno (`--since/--until` albo temat), repo z cwd  | workdir z ledgerem, kolejką, planami, stroną przeglądu  | interaktywnie         |
-| `vibecrafted intents <agent>`             | jeden tor: JSON sharda albo toru, ścieżka briefu | `<shard>.json` albo `<tor>.verdicts.json`, raport       | `0` po dispatchu      |
-| `intents_cli.py <workdir> plan --stage …` | `extract` · `confront` · `implement`             | plan `vibecrafted.dispatch.v1` pod `<artifacts>/plans/` | `0`                   |
-| `intents_cli.py <workdir> status`         | —                                                | liczniki, powody otwarcia                               | `0` CLOSED · `1` OPEN |
+| Wejście                                             | Argumenty                                        | Produkuje                                               | Wyjście               |
+| --------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------- | --------------------- |
+| `/vc-intents`                                       | okno (`--since/--until` albo temat), repo z cwd  | workdir z ledgerem, kolejką, planami, stroną przeglądu  | interaktywnie         |
+| `vibecrafted intents <agent>`                       | jeden tor: JSON sharda albo toru, ścieżka briefu | `<shard>.json` albo `<tor>.verdicts.json`, raport       | `0` po dispatchu      |
+| `intents_cli.py <workdir> --lang pl plan --stage …` | `extract` · `confront` · `implement`             | plan `vibecrafted.dispatch.v1` pod `<artifacts>/plans/` | `0`                   |
+| `intents_cli.py <workdir> --lang pl status`         | —                                                | liczniki, powody otwarcia                               | `0` CLOSED · `1` OPEN |
 
 ### Krawędzie eskalacji
 
 - Dwa moduły konkurują o prawdę, której intencja potrzebuje → `vibecrafted canary <agent>` (potwierdź w kodzie; canary nigdy nie refaktoruje)
 - Kolejka zapisana → `vibecrafted dispatch <intents-implement.*.dispatch.toml>` (domyślnie codex)
 - Worker twierdzi, że cięcie wylądowało → `vibecrafted trust <agent>`, zanim ledger powie `landed`
-- Sprzeczność dwu wypowiedzi źródłowych → `aicx clarify`, potem pytanie do użytkownika
+- Sprzeczność dwu wypowiedzi źródłowych → `aicx clarify`, a gdy dalej nierozstrzygnięta — pytanie do użytkownika
 - Wejściem jest spisany plan, nie korpus → `vibecrafted audit <agent>`
 
 ### Artefakty sesji

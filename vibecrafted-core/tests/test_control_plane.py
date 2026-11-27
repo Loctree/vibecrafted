@@ -1365,6 +1365,132 @@ def test_sync_state_never_resurrects_guardian_settlement_as_stalled(
     assert run["run_id"] not in {item["run_id"] for item in snapshot["stalled_runs"]}
 
 
+def test_settlement_notice_after_rotation_keeps_the_run_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Rotation leaves the snapshot as the only record of a finished run. A
+    Guardian settlement notice that arrives afterwards must fold onto it; alone
+    it used to replace the executor, root, report and model of the run."""
+    home = tmp_path / ".vibecrafted"
+    monkeypatch.setenv("VIBECRAFTED_HOME", str(home))
+    run_id = "work-rotated-agy"
+    root = tmp_path / "worktree"
+    root.mkdir()
+    report = tmp_path / "report.md"
+    finished = dt.datetime.now(dt.UTC) - dt.timedelta(hours=4)
+    control_plane._append_event(
+        {
+            "ts": finished.isoformat(),
+            "run_id": run_id,
+            "kind": "spawn-update",
+            "message": "process failed with exit code 1",
+            "payload": {
+                "agent": "agy",
+                "skill": "workflow",
+                "mode": "headless",
+                "state": "failed",
+                "root": str(root),
+                "report": str(report),
+                "model_requested": "gemini-4-carbon-high",
+                "agent_session_id": "conv-rotated",
+                "exit_code": 1,
+                "liveness": "terminal",
+                "completed_at": finished.isoformat(),
+            },
+        }
+    )
+    before = next(
+        run
+        for run in control_plane.sync_state(run_id)["recent_runs"]
+        if run["run_id"] == run_id
+    )
+    assert before["agent"] == "agy"
+
+    control_plane.event_stream_path().unlink()
+    control_plane._append_event(
+        {
+            "ts": dt.datetime.now(dt.UTC).isoformat(),
+            "run_id": run_id,
+            "kind": "spawn-update",
+            "payload": {
+                "agent": "guardian",
+                "skill": "settlement",
+                "mode": "n",
+                "state": "settled",
+                "status": "settled",
+                "verdict": "needs_attention",
+            },
+        }
+    )
+    after = next(
+        run
+        for run in control_plane.sync_state(run_id)["recent_runs"]
+        if run["run_id"] == run_id
+    )
+
+    assert after["agent"] == "agy"
+    assert after["root"] == before["root"]
+    assert after["latest_report"] == str(report)
+    assert after["model_requested"] == "gemini-4-carbon-high"
+    assert after["agent_session_id"] == "conv-rotated"
+    assert after["exit_code"] == 1
+
+
+def test_snapshot_is_the_base_only_for_a_run_older_than_the_active_segment() -> None:
+    """A run that started inside the active segment still has every event in the
+    stream. Its earlier projection must not be folded back in as a fact."""
+    segment_started = dt.datetime(2026, 11, 18, 2, 3, tzinfo=dt.UTC)
+    snapshot = {
+        "run_id": "work-1",
+        "agent": "agy",
+        "started_at": "2026-11-17T22:43:10+00:00",
+        "liveness": "terminal",
+        "artifact_ok": True,
+        "model_requested": "gemini-4-carbon-high",
+    }
+
+    older = control_plane._status_from_snapshot(snapshot, segment_started)
+    inside = control_plane._status_from_snapshot(
+        {**snapshot, "started_at": "2026-11-18T02:10:00+00:00"}, segment_started
+    )
+
+    assert older is not None
+    assert older.agent == "agy"
+    assert older.extra == {
+        "artifact_ok": True,
+        "model_requested": "gemini-4-carbon-high",
+    }
+    assert inside is None
+    assert control_plane._status_from_snapshot(snapshot, None) is None
+    assert (
+        control_plane._status_from_snapshot(
+            {**snapshot, "started_at": ""}, segment_started
+        )
+        is None
+    )
+
+
+def test_live_snapshot_does_not_carry_its_provisional_artifact_verdict() -> None:
+    """A run that outlived a rotation is still working. The verdict its last
+    projection derived ("report missing") is not final and must be recomputed."""
+    status = control_plane._status_from_snapshot(
+        {
+            "run_id": "work-2",
+            "agent": "codex",
+            "started_at": "2026-11-17T22:43:10+00:00",
+            "liveness": "active",
+            "artifact_ok": False,
+            "artifact_errors": ["report_missing"],
+            "recovery_required": True,
+            "model_requested": "gpt-6",
+        },
+        dt.datetime(2026, 11, 18, 2, 3, tzinfo=dt.UTC),
+    )
+
+    assert status is not None
+    assert status.extra == {"model_requested": "gpt-6"}
+
+
 def test_projection_notification_cannot_regress_newer_lifecycle_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

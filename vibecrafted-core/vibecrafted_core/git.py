@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -21,6 +22,9 @@ def _git(
         capture_output=True,
         text=True,
         check=check,
+        # A read must not rewrite the index of the checkout it describes:
+        # without this, ``git status`` refreshes and writes it.
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
     )
 
 
@@ -554,58 +558,290 @@ def _worktree_summary(payload: dict[str, Any]) -> str:
     lines.extend(
         (
             "",
-            "Read-only inspection. Cleanup, pruning and merge preparation are not available.",
+            "Inspection only. To free space: vc-git worktrees cleanup.",
+            "For merged branches: vc-git branches cleanup.",
         )
     )
     return "\n".join(lines)
 
 
+_CLEAN_GROUPS = (
+    ("removable", "Safe to remove (branch and commits stay; only build output goes)"),
+    ("local_files", "Clean, but holds ignored local files (add --with-ignored)"),
+    ("keep", "Kept: work that exists nowhere else"),
+    ("in_use", "Kept: in use or protected"),
+    ("missing", "Directory already gone; registration is dropped"),
+)
+
+
+def _cleanup_summary(view: dict[str, Any]) -> str:
+    """Render the cleanup view grouped by what removal would cost."""
+    lines = [f"Target: {view['target_ref']} ({view['target_sha'][:12]})"]
+    for verdict, title in _CLEAN_GROUPS:
+        rows = [row for row in view["worktrees"] if row["verdict"] == verdict]
+        if not rows:
+            continue
+        lines.extend(("", f"{title}: {len(rows)}"))
+        for row in rows:
+            lines.append(f"  {row['path']}")
+            lines.append(f"    {row['why']}")
+            if row["local_only_ignored"]:
+                shown = ", ".join(row["local_only_ignored"][:4])
+                more = len(row["local_only_ignored"]) - 4
+                lines.append(
+                    f"    ignored: {shown}" + (f" (+{more} more)" if more > 0 else "")
+                )
+    return "\n".join(lines)
+
+
+def _clean_worktrees(args: argparse.Namespace) -> int:
+    """List, confirm with the person at the terminal, then remove."""
+    from .git_worktrees import (
+        prune_worktree_metadata,
+        remove_worktrees,
+        worktree_cleanup_view,
+    )
+
+    view = worktree_cleanup_view(args.project, target=args.target)
+    allowed = {"removable", "local_files"} if args.with_ignored else {"removable"}
+    chosen = [row["path"] for row in view["worktrees"] if row["verdict"] in allowed]
+    if args.json and (args.dry_run or not args.yes):
+        print(json.dumps(view, indent=2, sort_keys=True))
+        return 0
+    if not args.json:
+        print(_cleanup_summary(view))
+        print()
+    stale = sum(row["verdict"] == "missing" for row in view["worktrees"])
+    if args.dry_run:
+        print(
+            f"Dry run: {len(chosen)} worktree(s) would be removed, "
+            f"{stale} stale registration(s) dropped."
+        )
+        return 0
+    if not chosen:
+        pruned = prune_worktree_metadata(args.project)
+        print(f"Nothing to remove. Dropped {len(pruned)} stale registration(s).")
+        return 0
+    if not _confirmed(
+        f"Remove {len(chosen)} worktree(s)? Branches stay. [y/N] ",
+        len(chosen),
+        "worktree(s)",
+        args.yes,
+    ):
+        return 0
+    result = remove_worktrees(args.project, chosen, with_ignored=args.with_ignored)
+    result["pruned"] = prune_worktree_metadata(args.project)
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(
+            f"Removed {len(result['removed'])} worktree(s), "
+            f"dropped {len(result['pruned'])} stale registration(s)."
+        )
+        for item in result["refused"]:
+            print(f"  kept {item['path']}: {item['reason']}")
+    return 1 if result["refused"] else 0
+
+
+def _confirmed(question: str, count: int, noun: str, yes: bool) -> bool:
+    """Ask the person at the terminal; without a terminal, require --yes."""
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        print(f"{count} {noun} can be removed. Re-run with --yes.")
+        return False
+    if input(question).strip().lower() in {"y", "yes", "t", "tak"}:
+        return True
+    print("Nothing removed.")
+    return False
+
+
+def _branches_main(arguments: list[str]) -> int:
+    """vc-git branches cleanup: delete branch names whose commits are in the target."""
+    from .git_branches import branch_cleanup_view, remove_branches
+
+    parser = argparse.ArgumentParser(
+        prog="vc-git branches",
+        description="Remove branches whose every commit is already in the target.",
+        epilog=(
+            "Only branches fully contained in the target are removed, so no commit "
+            "is lost. Trunks, release/recovery/archive branches, the target and any "
+            "branch checked out in a worktree are kept. Squash-merged branches are "
+            "listed as kept: their commits are not in the target."
+        ),
+    )
+    parser.add_argument("action", choices=("cleanup",))
+    parser.add_argument("project", nargs="?", default=".", help="repository path")
+    parser.add_argument(
+        "--target", help="branch or ref to compare against (default: HEAD)"
+    )
+    parser.add_argument(
+        "--also-remote",
+        action="store_true",
+        help="also delete merged branches on the remote",
+    )
+    parser.add_argument("--remote", default="origin", help="remote for --also-remote")
+    parser.add_argument("--dry-run", action="store_true", help="show, remove nothing")
+    parser.add_argument("--yes", action="store_true", help="remove without asking")
+    parser.add_argument("--json", action="store_true", help="emit structured JSON")
+    args = parser.parse_args(arguments)
+    try:
+        view = branch_cleanup_view(
+            args.project,
+            target=args.target,
+            also_remote=args.also_remote,
+            remote=args.remote,
+        )
+        chosen = [row for row in view["branches"] if row["verdict"] == "removable"]
+        if args.json and (args.dry_run or not args.yes):
+            print(json.dumps(view, indent=2, sort_keys=True))
+            return 0
+        if not args.json:
+            print(f"Target: {view['target']} ({view['target_sha'][:12]})")
+            for verdict, title in (
+                ("removable", "Safe to remove (every commit is in the target)"),
+                ("keep", "Kept: commits the target does not contain"),
+                ("in_use", "Kept: checked out in a worktree"),
+                ("protected", "Kept: protected"),
+            ):
+                rows = [row for row in view["branches"] if row["verdict"] == verdict]
+                if rows:
+                    print(f"\n{title}: {len(rows)}")
+                    for row in rows:
+                        print(f"  {row['scope']:<7} {row['name']}")
+            print()
+        if not chosen:
+            print("Nothing to remove.")
+            return 0
+        if args.dry_run:
+            print(f"Dry run: {len(chosen)} branch(es) would be removed.")
+            return 0
+        if not _confirmed(
+            f"Remove {len(chosen)} branch(es)? [y/N] ",
+            len(chosen),
+            "branch(es)",
+            args.yes,
+        ):
+            return 0
+        result = remove_branches(args.project, view)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(f"Removed {len(result['removed'])} branch(es).")
+            for item in result["refused"]:
+                print(f"  kept {item['branch']}: {item['reason']}")
+        return 1 if result["refused"] else 0
+    except (RuntimeError, OSError) as exc:
+        print(f"vc-git: {exc}", file=sys.stderr)
+        return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     """Expose the original rich repo renderer as a checkout-free executable."""
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments[:1] == ["worktrees"]:
-        arguments = ["--worktrees", *arguments[1:]]
-    parser = argparse.ArgumentParser(
-        prog="vc-git",
-        description="Show full Git context, including every worktree.",
-        epilog=(
-            "Read-only worktree reception: vc-git worktrees list|triage [PROJECT] "
-            "[--target BRANCH] [--json]. The spelling --worktrees list|triage is also accepted. "
-            "Cleanup, pruning and merge preparation are deferred and unavailable."
-        ),
-    )
+    if arguments[:1] and arguments[0] in ("landed", "gems", "save"):
+        from .git_cli import run
+
+        return run(arguments[0], arguments[1:])
+    if arguments[:1] == ["branches"]:
+        return _branches_main(arguments[1:])
+    worktrees_command = arguments[:1] == ["worktrees"]
+    if worktrees_command:
+        arguments = arguments[1:]
+    if worktrees_command:
+        parser = argparse.ArgumentParser(
+            prog="vc-git worktrees",
+            description="Show full Git context, including every worktree.",
+            epilog=(
+                "vc-git worktrees [list|triage|cleanup] [PROJECT] [--target BRANCH] [--json]. "
+                "list and triage only inspect. cleanup (alias: prune) shows what removal "
+                "would cost, asks, then removes worktrees whose work is committed and drops "
+                "registrations of directories that are gone. Branches always stay; "
+                "--dry-run previews, --yes skips the question, --with-ignored also takes "
+                "worktrees holding ignored local files. For merged branches: "
+                "vc-git branches cleanup [--also-remote]."
+            ),
+        )
+    else:
+        # The commands are dispatched before this parser exists, so argparse
+        # cannot list them itself; without this block they read as absent.
+        parser = argparse.ArgumentParser(
+            prog="vc-git",
+            usage=(
+                "%(prog)s [-h] [--json] [--version] "
+                "[--compare DISPATCH_RUN_ID --cuts LEFT RIGHT] [project]\n"
+                "       %(prog)s {landed,gems,save,worktrees,branches} ..."
+            ),
+            description="Show full Git context, including every worktree.",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog=(
+                "commands:\n"
+                "  landed ADDRESS...    did this work land? Compares content, so squash\n"
+                "                       merges, cherry-picks and plain copies count\n"
+                "  gems [search QUERY]  unlanded work worth keeping, copies first\n"
+                "  save [ADDRESS] --to patch|git-apply|commit|stash\n"
+                "                       keep work without touching it\n"
+                "  worktrees [list|triage|cleanup]\n"
+                "                       every worktree; cleanup removes only committed work\n"
+                "  branches cleanup     remove branches whose commits are all in the target\n"
+                "\n"
+                'Run "vc-git COMMAND --help" for the options of one command, '
+                'for example "vc-git worktrees --help".'
+            ),
+        )
+    if worktrees_command:
+        parser.add_argument(
+            "action",
+            nargs="?",
+            choices=("list", "triage", "cleanup", "prune"),
+            default="list",
+        )
+        parser.add_argument(
+            "--dry-run", action="store_true", help="cleanup: show, remove nothing"
+        )
+        parser.add_argument(
+            "--yes", action="store_true", help="cleanup: remove without asking"
+        )
+        parser.add_argument(
+            "--with-ignored",
+            action="store_true",
+            help="cleanup: also remove worktrees holding ignored local files",
+        )
     parser.add_argument("project", nargs="?", default=".", help="repository path")
     parser.add_argument("--json", action="store_true", help="emit structured JSON")
-    parser.add_argument(
-        "--worktrees",
-        choices=("list", "triage"),
-        help="read-only worktree inventory and reception triage",
+    # Same identity as `vibecrafted --version`: the package that executes.
+    # Imported here because the package __init__ imports this module.
+    from . import __version__
+
+    parser.add_argument("--version", action="version", version=f"vc-git {__version__}")
+    parser.set_defaults(
+        worktrees=worktrees_command, target=None, compare=None, cuts=None
     )
-    parser.add_argument(
-        "--target", help="local branch to inspect worktree integration against"
-    )
-    parser.add_argument(
-        "--compare",
-        metavar="DISPATCH_RUN_ID",
-        help="compare completed parallel work before deploy",
-    )
-    parser.add_argument(
-        "--cuts",
-        nargs=2,
-        metavar=("LEFT", "RIGHT"),
-        help="two settled, verified dispatch cuts",
-    )
+    if worktrees_command:
+        parser.add_argument(
+            "--target", help="local branch to inspect worktree integration against"
+        )
+    else:
+        parser.add_argument(
+            "--compare",
+            metavar="DISPATCH_RUN_ID",
+            help="compare completed parallel work before deploy",
+        )
+        parser.add_argument(
+            "--cuts",
+            nargs=2,
+            metavar=("LEFT", "RIGHT"),
+            help="two settled, verified dispatch cuts",
+        )
     args = parser.parse_args(arguments)
     if bool(args.compare) != bool(args.cuts):
         parser.error("--compare and --cuts must be supplied together")
-    if args.worktrees and args.compare:
-        parser.error("--worktrees cannot be combined with --compare")
-    if args.target and not args.worktrees:
-        parser.error("--target requires --worktrees")
     try:
         if args.worktrees:
             from .git_worktrees import worktree_inventory
 
+            if args.action in {"cleanup", "prune"}:
+                return _clean_worktrees(args)
             inventory = worktree_inventory(args.project, target=args.target)
             print(
                 json.dumps(inventory, indent=2, sort_keys=True)

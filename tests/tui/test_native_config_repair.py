@@ -88,6 +88,29 @@ Traceback (most recent call last):
 ValueError: KDL edit changes nested or structural content
 """.data(using: .utf8)!
 
+let downgradeRefusal = """
+Xcode: stable (/Applications/Xcode.app/Contents/Developer)
+Traceback (most recent call last):
+  File "/Applications/Vibecrafted.app/Contents/Resources/runtime-pack/scripts/vetcoders_install.py", line 30102, in _runtime_install
+    _refuse_runtime_pack_downgrade(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        payload_root,
+        ^^^^^^^^^^^^^
+        runtime_home,
+        ^^^^^^^^^^^^^
+        allow_older=bool(getattr(args, "allow_older_runtime", False)),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Applications/Vibecrafted.app/Contents/Resources/runtime-pack/scripts/vetcoders_install.py", line 29258, in _refuse_runtime_pack_downgrade
+    raise RuntimeError(
+    ...<2 lines>...
+    )
+RuntimeError: refusing to replace a newer active runtime with an older Runtime Pack (an upgrade never takes the Founder's tools backwards):
+  candidate Runtime Pack 4.5.2+g62253a16 was built 20261108, active generation 4.5.2+g22a646b9 was built 20261114
+  vibecrafted: 22a646b9 -> 62253a16
+""".data(using: .utf8)!
+
 let preferenceConflict = envelope(#"""
 {"schema": "vibecrafted.preference-conflict.v1", "status": "conflict",
  "message": "Your terminal-policy.toml overlaps the new defaults on terminal.shell. The previously verified runtime is still selected.",
@@ -177,6 +200,29 @@ case "caret":
   let excerpt = boundedResolverDiagnostic(stdout: Data(), stderr: traceback, limit: 240)
   emit(excerpt)
   emit(isTracebackCaret("          ^^^^^") ? "caret" : "kept")
+case "downgrade-refusal":
+  // The real reinstall path: a clean exit 1 whose stderr is the traceback.
+  let failure = runtimePackInstallerFailureDetail(
+    stdout: Data(), stderr: downgradeRefusal, terminationStatus: 1, clean: true,
+    timedOut: false)
+  emit(failure)
+  let refused = runtimeReinstallFailurePresentation(failure)
+  emit(refused.title)
+  emit(refused.critical ? "critical" : "calm")
+  emit(refused.detail.replacingOccurrences(of: "\n", with: " | "))
+  let other = runtimeReinstallFailurePresentation("the Runtime Pack installer exited 1: disk full")
+  emit(other.title)
+  emit(other.critical ? "critical" : "calm")
+case "written-refusal":
+  let written = """
+Checking the Runtime Pack signature
+  carrier 4.6.0+gaaaaaaaa
+vc-terminal requires macOS; omit this target on linux. Resolve this refusal and retry Upgrade.
+""".data(using: .utf8)!
+  emit(runtimePackInstallerFailureDetail(
+    stdout: Data(), stderr: written, terminationStatus: 1, clean: true, timedOut: false))
+  emit(runtimePackInstallerFailureDetail(
+    stdout: Data(), stderr: written, terminationStatus: 9, clean: false, timedOut: false))
 case "preference-conflict":
   let decoded = decodePreferenceConflict(from: preferenceConflict)!
   emit(preferenceConflictSummary(decoded))
@@ -198,7 +244,6 @@ case "reinstall-unresolved", "reinstall-absent", "reinstall-current",
     resolution: resolution, carrierGeneration: "4.3.2+gaaaaaaaa",
     configuration: "Configuration inspection found no changes to make.",
     serviceFailure: scenario == "reinstall-service" ? "receipt admission refused" : nil,
-    canUpgrade: scenario == "reinstall-upgrade",
     explicitRepublish: scenario == "reinstall-republish")
   emit(presentation.title)
   emit(presentation.actionTitle ?? "<none>")
@@ -334,6 +379,41 @@ def test_caret_tails_never_reach_the_dialog(policy_binary: Path) -> None:
     assert marker == "caret"
 
 
+def test_an_older_carrier_refusal_reads_as_a_fact_not_as_a_crash(
+    policy_binary: Path,
+) -> None:
+    """Python 3.13 prints a multi-line call as several source lines."""
+    excerpt, title, tone, detail, other_title, other_tone = _run(
+        policy_binary, "downgrade-refusal"
+    )
+    # excerpt is what runtimePackInstallerResult throws for this clean exit 1.
+    for leak in ("payload_root", "allow_older=", "lines>", "raise ", "Traceback"):
+        assert leak not in excerpt
+    assert excerpt.startswith("the Runtime Pack installer exited 1: ")
+    assert "refusing to replace a newer active runtime" in excerpt
+    assert "was built 20261108" in excerpt
+    assert title == "This App is older than the installed runtime"
+    assert tone == "calm"
+    assert "Nothing was changed" in detail
+    assert "4.5.2+g62253a16 was built 20261108" in detail
+    assert "Install a newer Vibecrafted App" in detail
+    assert other_title == "Vibecrafted could not reinstall its runtime"
+    assert other_tone == "critical"
+
+
+def test_a_refusal_the_installer_writes_is_shown_as_written(
+    policy_binary: Path,
+) -> None:
+    """Only a run that never reached a verdict is described by the App."""
+    written, killed = _run(policy_binary, "written-refusal")
+    assert written == (
+        "vc-terminal requires macOS; omit this target on linux. "
+        "Resolve this refusal and retry Upgrade."
+    )
+    assert killed.startswith("the Runtime Pack installer exited 9: ")
+    assert "Resolve this refusal and retry Upgrade." in killed
+
+
 def test_preference_conflict_names_settings_and_keeps_a_bound_choice(
     policy_binary: Path,
 ) -> None:
@@ -457,6 +537,8 @@ final class ControllerFixture {
   func currentProductUpdateIdentity() -> Identity {
     Identity(appGeneration: carrier, packGeneration: canonicalInstall?.root.lastPathComponent)
   }
+  // Inert pointer boundary: these scenarios never name a trusted active pointer.
+  func activeRuntimeGenerationLabel() -> String? { nil }
   func applyResolution(_ resolution: RuntimeContract) -> CanonicalRuntimeInstall? {
     if case .ready(let install) = resolution {
       canonicalInstall = install; canonicalRuntimeEnvironment = [:]; return install
@@ -627,9 +709,10 @@ def test_startup_revalidates_before_offering_the_carrier(
 
 
 def test_a_verified_newer_carrier_keeps_the_upgrade_choice(policy_binary: Path) -> None:
+    # The carrier relation, not a caller flag, decides the upgrade (contract I1).
     title, action, detail = _run(policy_binary, "reinstall-upgrade")
-    assert title == "Upgrade the Vibecrafted runtime from this App?"
-    assert action == "Upgrade"
+    assert title == "Upgrade to Vibecrafted 4.3.2?"
+    assert action == "Upgrade to Vibecrafted 4.3.2"
     assert "Installed generation: 4.3.1+gaaaaaaaa" in detail
 
 

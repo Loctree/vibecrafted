@@ -228,6 +228,10 @@ def confirm_codex_native_fork(
             "cwd": root,
             "sandbox": sandbox,
             "approvalPolicy": approval,
+            # Identity needs thread metadata only. Without this, thread/fork
+            # returns the whole parent history in `thread.turns`; a long
+            # session overruns MAX_ACK_BYTES and the fork is refused.
+            "excludeTurns": True,
         }
         if model:
             params["model"] = model

@@ -54,16 +54,32 @@ def _git_env() -> dict[str, str]:
     }
 
 
-def _run(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    root: Path,
+    *args: str,
+    input: str | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", *args],
         cwd=root,
+        input=input,
         capture_output=True,
         text=True,
         errors="surrogateescape",
         check=False,
-        env=_git_env(),
+        env={**_git_env(), **(env or {})},
     )
+
+
+def refuse_repo_env_overrides() -> None:
+    """Refuse to read Git while repository-redirecting variables are exported."""
+    overrides = sorted(_REPO_ENV.intersection(os.environ))
+    if overrides:
+        raise RuntimeError(
+            "unset repository-local Git environment overrides before worktree inspection: "
+            + ", ".join(overrides)
+        )
 
 
 def _required(root: Path, *args: str) -> str:
@@ -315,12 +331,7 @@ def worktree_inventory(
     project: str | Path = ".", *, target: str | None = None
 ) -> dict[str, Any]:
     """Return a read-only, evidence-labelled inventory for one repository."""
-    overrides = sorted(_REPO_ENV.intersection(os.environ))
-    if overrides:
-        raise RuntimeError(
-            "unset repository-local Git environment overrides before worktree inspection: "
-            + ", ".join(overrides)
-        )
+    refuse_repo_env_overrides()
     root = _require_git_root(Path(project).expanduser().resolve())
     target_ref, target_sha = _target(root, target)
     entries = _registered(root)
@@ -611,3 +622,158 @@ def worktree_inventory(
         "ownership_scan_errors": problems,
         "worktrees": rows,
     }
+
+
+# Regenerable build and tool output. Losing it costs a rebuild, never work.
+_REGENERABLE = frozenset(
+    {
+        "__pycache__",
+        ".ruff_cache",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".loctree",
+        ".DS_Store",
+        ".venv",
+        ".vc-build-lease",
+        "node_modules",
+        "target",
+        "build",
+        "dist",
+        "uv.lock",
+    }
+)
+_IN_USE = (
+    "primary or current checkout",
+    "invoking process is inside",
+    "active or unknown run uses this worktree",
+    "Git worktree is locked",
+    "target branch checkout",
+    "default or conventional trunk",
+    "recovery or archive checkout",
+    "durable report, transcript, artifact or receipt",
+    "a recorded PID is alive",
+    "runtime receipt is non-terminal",
+)
+
+
+def _local_only_ignored(payload: dict[str, Any]) -> list[str]:
+    """Ignored paths that are not plain regenerable output."""
+    kept: list[str] = []
+    for field in payload["paths"]:
+        if not field.startswith("!! "):
+            continue
+        parts = [part for part in field[3:].split("/") if part]
+        if not any(
+            part in _REGENERABLE or part.endswith((".egg-info", ".pyc"))
+            for part in parts
+        ):
+            kept.append(field[3:])
+    return kept
+
+
+def worktree_cleanup_view(
+    project: str | Path = ".", *, target: str | None = None
+) -> dict[str, Any]:
+    """Sort worktrees by what a person would lose by removing each one.
+
+    Removing a worktree keeps its branch and every commit on it. The only
+    things that can be lost are uncommitted files, commits on a detached HEAD
+    and ignored local files, so those alone decide the verdict.
+    """
+    inventory = worktree_inventory(project, target=target)
+    rows: list[dict[str, Any]] = []
+    for item in inventory["worktrees"]:
+        payload = item["payload"]
+        branch = item["branch"] or ""
+        in_use = [r for r in item["reasons"] if r.startswith(_IN_USE)]
+        local_only: list[str] = []
+        if item["prunable"] or item["identity"] is None:
+            verdict, why = "missing", "directory is gone; only Git metadata remains"
+        elif item["triage"] == "working" or in_use:
+            verdict, why = "in_use", (in_use or ["a run is still using it"])[0]
+        elif payload is None:
+            verdict, why = "keep", "Git status could not be read"
+        elif (
+            payload["staged"]
+            or payload["unstaged"]
+            or payload["untracked"]
+            or payload["hidden_tracked"]
+        ):
+            verdict = "keep"
+            why = (
+                f"uncommitted work: {payload['staged']} staged, "
+                f"{payload['unstaged']} modified, {payload['untracked']} untracked"
+            )
+        elif (
+            not branch.startswith("refs/heads/")
+            and item["integration"] != "exact_ancestor"
+        ):
+            verdict, why = "keep", "detached HEAD with commits not in the target"
+        else:
+            local_only = _local_only_ignored(payload)
+            ahead = (item["divergence"] or {}).get("ahead")
+            name = branch.removeprefix("refs/heads/") or "detached"
+            if item["integration"] == "exact_ancestor":
+                why = "fully contained in the target"
+            else:
+                why = f"{ahead if ahead is not None else 'some'} commit(s) stay on branch {name}"
+            verdict = "local_files" if local_only else "removable"
+        rows.append(
+            {
+                "path": item["path"],
+                "branch": branch.removeprefix("refs/heads/") or None,
+                "head": item["head"],
+                "verdict": verdict,
+                "why": why,
+                "local_only_ignored": local_only,
+            }
+        )
+    return {
+        "schema": "vibecrafted.worktree-cleanup-view.v1",
+        "root": inventory["root"],
+        "target_ref": inventory["target_ref"],
+        "target_sha": inventory["target_sha"],
+        "worktrees": rows,
+    }
+
+
+def remove_worktrees(
+    project: str | Path, paths: list[str], *, with_ignored: bool = False
+) -> dict[str, Any]:
+    """Remove the named worktrees after re-reading each one; branches stay.
+
+    Never passes --force: Git itself refuses a checkout holding modified or
+    untracked files, so a change made after the listing still stops removal.
+    """
+    root = _require_git_root(Path(project).expanduser().resolve())
+    allowed = {"removable", "local_files"} if with_ignored else {"removable"}
+    wanted = {_path_key(path) for path in paths}
+    removed: list[str] = []
+    refused: list[dict[str, str]] = []
+    for row in worktree_cleanup_view(root)["worktrees"]:
+        if _path_key(row["path"]) not in wanted:
+            continue
+        if row["verdict"] not in allowed:
+            refused.append({"path": row["path"], "reason": row["why"]})
+            continue
+        result = _run(root, "worktree", "remove", "--", row["path"])
+        if result.returncode:
+            refused.append({"path": row["path"], "reason": result.stderr.strip()})
+        else:
+            removed.append(row["path"])
+    return {
+        "schema": "vibecrafted.worktree-cleanup-result.v1",
+        "removed": removed,
+        "refused": refused,
+    }
+
+
+def prune_worktree_metadata(project: str | Path = ".") -> list[str]:
+    """Drop Git registrations whose directory no longer exists."""
+    root = _require_git_root(Path(project).expanduser().resolve())
+    result = _run(root, "worktree", "prune", "--verbose")
+    if result.returncode:
+        raise RuntimeError(f"worktree prune failed: {result.stderr.strip()}")
+    return [
+        line for line in (result.stdout + result.stderr).splitlines() if line.strip()
+    ]

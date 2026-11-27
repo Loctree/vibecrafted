@@ -124,7 +124,8 @@ def test_foundations_default_prefix_uses_xdg_local_share(tmp_path: Path) -> None
     )
 
     expected = tmp_path / ".local" / "share" / "vibecrafted" / "bin"
-    assert f"Runtime bin:  {expected}" in result.stdout
+    # G2: the carrier's stdout is one JSON document, so the banner is stderr.
+    assert f"Runtime bin:  {expected}" in result.stderr
 
 
 def test_foundations_fail_fast_on_runtime_root_drift(tmp_path: Path) -> None:

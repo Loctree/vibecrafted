@@ -55,6 +55,7 @@ import select
 import shlex
 import shutil
 import signal
+import socket
 import stat
 import struct
 import subprocess
@@ -3155,6 +3156,8 @@ PYTHON_ENTRYPOINT_LAUNCHERS = [
 
 RELEASE_CONTRACT_PACKAGE_ASSETS = (
     "product_contract.py",
+    "external_products.py",
+    "terminal_host.py",
     "runtime_pack_contract.py",
     "walkaround_runner.py",
     "schemas/unified_product.schema.v1.json",
@@ -3754,7 +3757,6 @@ _RUNTIME_VERIFIER_OBJECT_SCHEMA_DEFS = frozenset(
     {
         "assemblyReceipt",
         "fileEntry",
-        "launchContract",
         "moduleBinding",
         "moduleManifest",
         "outerBundleCode",
@@ -3777,52 +3779,46 @@ _RUNTIME_VERIFIER_OBJECT_SCHEMA_DEFS = frozenset(
 )
 _RUNTIME_VERIFIER_TYPED_OBJECT_SCHEMA_PATHS = frozenset(
     {
+        "$defs/assemblyReceipt",
         "$defs/fileEntry",
+        "$defs/moduleBinding",
         "$defs/moduleManifest",
         "$defs/moduleManifest/properties/entrypoints",
-        "$defs/signedFileTransformation",
-        "$defs/assemblyReceipt",
-        "$defs/moduleBinding",
         "$defs/outerBundleCode",
-        "$defs/launchContract",
-        "$defs/launchContract/properties/primary_shell",
-        "$defs/launchContract/properties/shell",
-        "$defs/launchContract/properties/environment",
-        "$defs/productManifest",
-        "$defs/productManifest/properties/modules/allOf/0/contains",
-        "$defs/productManifest/properties/modules/allOf/1/contains",
-        "$defs/productManifest/properties/entrypoints",
         "$defs/productIdentity",
-        "$defs/runtimeIdentity",
-        "$defs/releasePair",
-        "$defs/releaseAbsent",
-        "$defs/transactionReceipt",
+        "$defs/productManifest",
+        "$defs/productManifest/properties/entrypoints",
+        "$defs/productManifest/properties/source_revisions",
         "$defs/proofArtifact",
+        "$defs/releaseAbsent",
         "$defs/releaseModuleIdentity",
-        "$defs/releaseModuleIdentity/properties/manifest",
         "$defs/releaseModuleIdentity/properties/assembly_receipt",
+        "$defs/releaseModuleIdentity/properties/manifest",
         "$defs/releaseOutput",
-        "$defs/releaseOutput/properties/signature_policy",
-        "$defs/releaseOutput/properties/product",
-        "$defs/releaseOutput/properties/product/properties/manifest",
-        "$defs/releaseOutput/properties/outer_executable",
-        "$defs/releaseOutput/properties/outer_executable/properties/signer_policy",
         "$defs/releaseOutput/properties/code_resources",
         "$defs/releaseOutput/properties/dmg",
-        "$defs/releaseOutput/properties/runtime_pack",
-        "$defs/releaseOutput/properties/runtime_pack/properties/provenance",
-        "$defs/releaseOutput/properties/runtime_pack/properties/provenance/properties/source_revisions",
-        "$defs/releaseOutput/properties/modules",
-        "$defs/releaseOutput/properties/source_revisions",
         "$defs/releaseOutput/properties/notarization",
         "$defs/releaseOutput/properties/notarization/properties/app",
         "$defs/releaseOutput/properties/notarization/properties/dmg",
-        "$defs/runnerAssertionObservation",
+        "$defs/releaseOutput/properties/outer_executable",
+        "$defs/releaseOutput/properties/outer_executable/properties/signer_policy",
+        "$defs/releaseOutput/properties/product",
+        "$defs/releaseOutput/properties/product/properties/manifest",
+        "$defs/releaseOutput/properties/runtime_pack",
+        "$defs/releaseOutput/properties/runtime_pack/properties/provenance",
+        "$defs/releaseOutput/properties/runtime_pack/properties/provenance/properties/source_revisions",
+        "$defs/releaseOutput/properties/signature_policy",
+        "$defs/releaseOutput/properties/source_revisions",
+        "$defs/releasePair",
         "$defs/runnerArgvObservation",
-        "$defs/runnerSemanticObservation",
+        "$defs/runnerAssertionObservation",
         "$defs/runnerProbeObservations",
+        "$defs/runnerSemanticObservation",
         "$defs/runnerWalkaroundReceipt",
         "$defs/runnerWalkaroundReceipt/properties/observations",
+        "$defs/runtimeIdentity",
+        "$defs/signedFileTransformation",
+        "$defs/transactionReceipt",
     }
 )
 _RUNTIME_VERIFIER_UNTYPED_OBJECT_MATCHER_PATHS = frozenset(
@@ -5667,6 +5663,150 @@ def _runtime_service_pair_state(
     )
 
 
+def _read_runtime_stop_observation(
+    path: Path,
+) -> tuple[dict[str, Any], os.stat_result] | None:
+    """Read bounded owned JSON without following links or blocking on a FIFO."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o022
+                or metadata.st_nlink != 1
+            ):
+                return None
+            body = stream.read(16385)
+        if len(body) > 16384:
+            return None
+        payload = json.loads(body)
+    except (OSError, ValueError):
+        return None
+    return (payload, metadata) if isinstance(payload, dict) else None
+
+
+def _native_runtime_pair_is_quiescent(shared_home: Path) -> bool:
+    """Prove a stopped native pair without treating failed health as absence."""
+    if sys.platform != "darwin":
+        return False
+    server_dir = shared_home / "server"
+    execution_path = server_dir / "guardian.execution.json"
+    status_path = server_dir / "supervisor.status.json"
+    execution_observation = _read_runtime_stop_observation(execution_path)
+    status_observation = _read_runtime_stop_observation(status_path)
+    if execution_observation is None or status_observation is None:
+        return False
+    execution, execution_metadata = execution_observation
+    supervisor, supervisor_metadata = status_observation
+    if (
+        execution.get("schema") != "vibecrafted.supervisor-guardian.v1"
+        or execution.get("execution") != "supervisor-thread"
+        or execution.get("ready") is not False
+        or not isinstance(execution.get("nonce"), str)
+        or not execution["nonce"]
+        or supervisor.get("schema") != "vibecrafted.server-supervisor.v1"
+        or supervisor.get("state") != "stopped"
+        or supervisor.get("service_managed") is not True
+    ):
+        return False
+    owner_pid = execution.get("owner_pid")
+    if (
+        not isinstance(owner_pid, int)
+        or isinstance(owner_pid, bool)
+        or owner_pid <= 1
+        or supervisor.get("supervisor_pid") != owner_pid
+    ):
+        return False
+    pair = supervisor.get("managed_pair")
+    if not isinstance(pair, dict) or any(
+        role not in pair or pair[role] is not None
+        for role in ("server_pid", "guardian_pid", "guardian_owner_pid")
+    ):
+        return False
+    endpoint = supervisor.get("endpoint")
+    if not isinstance(endpoint, dict):
+        return False
+    host, port = endpoint.get("host"), endpoint.get("port")
+    if (
+        not isinstance(host, str)
+        or host not in {"127.0.0.1", "::1"}
+        or not isinstance(port, int)
+        or isinstance(port, bool)
+        or not 0 < port <= 65535
+    ):
+        return False
+    rendered_host = f"[{host}]" if ":" in host else host
+    if (
+        endpoint.get("url") != f"http://{rendered_host}:{port}"
+        or not isinstance(endpoint.get("public_url"), str)
+        or not endpoint["public_url"]
+        or execution.get("server_url") != endpoint["public_url"]
+    ):
+        return False
+    role_paths = (server_dir / "server.pid", server_dir / "guardian.pid")
+    if any(os.path.lexists(path) for path in role_paths):
+        return False
+    try:
+        os.kill(owner_pid, 0)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        return False
+    else:
+        return False
+    timeout = 0.25
+    deadline = _RUNTIME_SERVICE_COMMAND_DEADLINE.get()
+    if deadline is not None:
+        timeout = min(timeout, deadline - time.monotonic())
+        if timeout <= 0:
+            raise _RuntimeServiceBudgetExhausted(
+                "runtime settlement deadline expired before native stopped-pair proof"
+            )
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return False
+    except ConnectionRefusedError:
+        pass
+    except OSError:
+        return False
+    # A refused connect proves no listener, not a free endpoint: Linux refuses
+    # a connect to a socket that is bound but not listening (macOS lets it time
+    # out). Binding proves no other socket holds the port; SO_REUSEADDR admits
+    # the stopped server's own TIME_WAIT.
+    try:
+        family, _, _, _, address = socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM
+        )[0]
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(address)
+    except OSError:
+        return False
+    for path, metadata in (
+        (execution_path, execution_metadata),
+        (status_path, supervisor_metadata),
+    ):
+        try:
+            final_metadata = path.lstat()
+        except OSError:
+            return False
+        if (
+            final_metadata.st_dev != metadata.st_dev
+            or final_metadata.st_ino != metadata.st_ino
+            or final_metadata.st_ctime_ns != metadata.st_ctime_ns
+        ):
+            return False
+    if any(os.path.lexists(path) for path in role_paths):
+        return False
+    if deadline is not None and time.monotonic() >= deadline:
+        raise _RuntimeServiceBudgetExhausted(
+            "runtime settlement deadline expired during native stopped-pair proof"
+        )
+    return True
+
+
 def _runtime_service_snapshot(
     shared_home: Path,
 ) -> tuple[Path, _RuntimeServiceStatus, str] | None:
@@ -5691,6 +5831,16 @@ def _runtime_service_snapshot(
     # restart.
     if status.healthy:
         return launcher, status, "running"
+    # Native stopped status calls running-only pair-health. Never downgrade
+    # present but invalid native evidence into legacy PID-file absence.
+    if status.quiescent and os.path.lexists(
+        shared_home / "server" / "guardian.execution.json"
+    ):
+        if _native_runtime_pair_is_quiescent(shared_home):
+            return launcher, status, "stopped"
+        raise OSError(
+            "native stopped-pair evidence is uncertain; refusing install handoff"
+        )
     pair_state = _runtime_service_pair_state(launcher, shared_home)
     if status.reclaimable and pair_state == "orphaned":
         # The verified managed supervisor owns the lifecycle, while a guardian
@@ -9413,6 +9563,58 @@ def _is_native_executable(path: Path) -> bool:
 
 _TERMINAL_BUNDLE_DISPLAY_NAME = "Vibecrafted"
 _FIXED_TERMINAL_HOST = Path("/Applications/Vibecrafted.app/Contents/MacOS/vc-terminal")
+_STANDALONE_TERMINAL_HOST: Path | None = None
+_STANDALONE_TERMINAL_MIN_VERSION = (0, 18, 0)
+
+
+def _standalone_terminal_host() -> Path:
+    if _STANDALONE_TERMINAL_HOST is not None:
+        return _STANDALONE_TERMINAL_HOST
+    return (
+        _FIXED_TERMINAL_HOST.parents[3] / "vc-terminal.app/Contents/MacOS/vc-terminal"
+    )
+
+
+def _parse_terminal_semver(raw: str) -> tuple[int, int, int] | None:
+    parts = str(raw or "").strip().split(".")
+    if len(parts) < 2:
+        return None
+    numbers: list[int] = []
+    for part in parts[:3]:
+        match = re.match(r"^(\d+)", part)
+        if match is None:
+            return None
+        numbers.append(int(match.group(1)))
+    while len(numbers) < 3:
+        numbers.append(0)
+    return (numbers[0], numbers[1], numbers[2])
+
+
+def _is_standalone_bundle_terminal_host(path: Path) -> bool:
+    """Standalone /Applications/vc-terminal.app owns its own macOS Dock identity."""
+    if path != _standalone_terminal_host():
+        return False
+    try:
+        contents = path.parent.parent
+        bundle = contents.parent
+        for node in (path, path.parent, contents, bundle, contents / "Info.plist"):
+            if node.is_symlink():
+                return False
+        with (contents / "Info.plist").open("rb") as stream:
+            document = plistlib.load(stream)
+        if not isinstance(document, dict) or not _is_native_executable(path):
+            return False
+        version = _parse_terminal_semver(
+            str(document.get("CFBundleShortVersionString") or "")
+        )
+        return (
+            document.get("CFBundleIdentifier") == "io.vetcoders.vc-terminal"
+            and document.get("CFBundleExecutable") == "vc-terminal"
+            and version is not None
+            and version >= _STANDALONE_TERMINAL_MIN_VERSION
+        )
+    except (OSError, plistlib.InvalidFileException, ExpatError, ValueError, TypeError):
+        return False
 
 
 def _is_product_bundle_terminal_host(path: Path) -> bool:
@@ -9478,45 +9680,48 @@ def _signed_terminal_identity(path: Path) -> tuple[str, str]:
     return code, team
 
 
+def _external_products() -> Any:
+    """Load the stdlib-only external product owner from this physical runtime."""
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "vibecrafted-core/vibecrafted_core/external_products.py"
+    )
+    spec = importlib.util.spec_from_file_location("_installer_external_products", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeInstallRefusal(f"external product resolver missing: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _product_frame(generation: Path) -> Path:
+    if sys.platform != "darwin":
+        return generation / "libexec/vc-frame"
+    try:
+        return _external_products().resolve_frame(runtime=generation)
+    except RuntimeError as exc:
+        raise RuntimeInstallRefusal(str(exc)) from exc
+
+
 def _product_terminal_host(*, generation: Path, app_root: Path | None) -> Path:
     """Admit a matching fixed signed host before publishing a usable GUI entry."""
     if sys.platform == "darwin":
-        host = _FIXED_TERMINAL_HOST
-        if not _is_product_bundle_terminal_host(host):
-            raise RuntimeInstallRefusal(
-                "pending paired notarized app handoff: fixed /Applications/Vibecrafted.app host missing or malformed; no prior runtime was touched. "
-                "Install the matching notarized Vibecrafted.app first (open the DMG from https://vibecrafted.io and drag Vibecrafted to /Applications), "
-                "or rerun `curl -fsSL https://vibecrafted.io/install.sh | bash` — the bootstrap installs the paired App from the channel DMG before the Runtime Pack"
-            )
-        candidate = generation / "libexec/vc-terminal"
-        if not candidate.exists():
-            # Older admitted carriers put the native host at bin/vc-terminal;
-            # publication moves these exact bytes to libexec before launchers.
-            candidate = generation / "bin/vc-terminal"
-        if not _is_native_executable(candidate) or candidate.is_symlink():
-            raise RuntimeInstallRefusal(
-                "pending paired notarized app handoff: candidate terminal native bytes missing"
-            )
-        if _signed_terminal_identity(host) != _signed_terminal_identity(candidate):
-            raise RuntimeInstallRefusal(
-                "pending paired notarized app handoff: fixed /Applications/Vibecrafted.app differs from this Runtime Pack's signed terminal; no prior runtime was touched. "
-                "Install the matching notarized Vibecrafted.app from the channel DMG first — rerun `curl -fsSL https://vibecrafted.io/install.sh | bash`, "
-                "which installs the paired App before the Runtime Pack"
-            )
-        if (
-            _signed_terminal_identity(host.parents[2])[1]
-            != _signed_terminal_identity(host)[1]
-        ):
-            raise RuntimeInstallRefusal(
-                "pending paired notarized app handoff: main app and terminal signing owners differ"
-            )
-        return host
+        try:
+            return _external_products().resolve_terminal()
+        except RuntimeError as exc:
+            raise RuntimeInstallRefusal(str(exc)) from exc
     return generation / "libexec" / "vc-terminal"
 
 
 def _runtime_terminal_launcher_environment(
     *, generation: Path, app_root: Path | None
 ) -> dict[str, str] | None:
+    if sys.platform == "darwin":
+        # Installation reports prerequisites, while launch admission verifies
+        # the then-current independent product. No binary hash pairing remains.
+        return {
+            "VIBECRAFTED_TERMINAL_HOST": _external_products().terminal_host.STANDALONE_HOST
+        }
     host = _product_terminal_host(generation=generation, app_root=app_root)
     if host == generation / "libexec" / "vc-terminal":
         return None
@@ -9524,6 +9729,27 @@ def _runtime_terminal_launcher_environment(
         "VIBECRAFTED_TERMINAL_HOST": str(host),
         "VIBECRAFTED_TERMINAL_CODE_ID": _signed_terminal_identity(host)[0],
     }
+
+
+def _refuse_embedded_darwin_products(root: Path) -> None:
+    """Admit a runtime source or pack without staging independent products."""
+    if sys.platform != "darwin":
+        return
+    for relative in (
+        "libexec/vc-terminal",
+        "libexec/vc-terminal.app",
+        "libexec/vc-frame",
+    ):
+        if (root / relative).exists():
+            product = Path(relative).name.removesuffix(".app")
+            raise RuntimeInstallRefusal(
+                f"external {product} must not be staged in a Darwin Runtime Pack: {relative}"
+            )
+    for name in ("vc-terminal", "vc-frame"):
+        if _is_native_executable(root / "bin" / name):
+            raise RuntimeInstallRefusal(
+                f"external {name} must not be staged in a Darwin Runtime Pack"
+            )
 
 
 def _materialize_runtime_generation_vc_terminal_entry(
@@ -9542,16 +9768,19 @@ def _materialize_runtime_generation_vc_terminal_entry(
     source = runtime_root / "scripts" / "vc-terminal-product-entry.sh"
     bin_term = runtime_root / "bin" / "vc-terminal"
     libexec = runtime_root / "libexec" / "vc-terminal"
-    libexec.parent.mkdir(parents=True, exist_ok=True)
+    _refuse_embedded_darwin_products(runtime_root)
+    # Only a native host moves into libexec; a Darwin generation has none and
+    # gets no empty libexec it would have to prove at retirement.
     if bin_term.is_file() and _is_native_executable(bin_term):
         if libexec.exists() and _is_native_executable(libexec):
             bin_term.unlink()
         else:
+            libexec.parent.mkdir(parents=True, exist_ok=True)
             os.replace(bin_term, libexec)
             libexec.chmod(0o755)
     has_native_host = libexec.is_file() and _is_native_executable(libexec)
     if not has_native_host:
-        if require_native_host:
+        if require_native_host and sys.platform != "darwin":
             raise OSError(
                 f"candidate runtime has no native vc-terminal host: {libexec}. "
                 "A source checkout is not a Runtime Pack; install a verified "
@@ -9799,7 +10028,7 @@ def _validate_runtime_verifier_ast(
 
 
 def _validate_runtime_verifier_schema(raw: bytes) -> None:
-    """Require the captured W0 schema's closed, canonical product-contract shape."""
+    """Require the captured schema's closed, canonical v2 product-contract shape."""
     try:
         schema = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -9847,18 +10076,7 @@ def _validate_runtime_verifier_schema(raw: bytes) -> None:
     if object_definitions != _RUNTIME_VERIFIER_OBJECT_SCHEMA_DEFS:
         raise OSError("candidate unified-product schema object inventory drifted")
 
-    partial_object_matchers = {
-        (
-            "$defs",
-            "productManifest",
-            "properties",
-            "modules",
-            "allOf",
-            str(index),
-            "contains",
-        )
-        for index in range(2)
-    }
+    partial_object_matchers: set[tuple[str, ...]] = set()
     observed_partial_matchers: set[tuple[str, ...]] = set()
     observed_typed_object_paths: set[str] = set()
     observed_untyped_object_matcher_paths: set[str] = set()
@@ -18980,7 +19198,13 @@ def _runtime_launcher_body(
         f"export VIBECRAFTED_ROOT={shlex_quote(str(generation))}",
         f"export VIBECRAFTED_PYTHON={shlex_quote(str(generation / 'bin/python3'))}",
         f"export VIBECRAFTED_RUNTIME_BIN={shlex_quote(str(generation / 'bin'))}",
-        f"export VIBECRAFTED_VC_FRAME_BIN={shlex_quote(str(generation / 'libexec/vc-frame'))}",
+        *(
+            []
+            if sys.platform == "darwin"
+            else [
+                f"export VIBECRAFTED_VC_FRAME_BIN={shlex_quote(str(generation / 'libexec/vc-frame'))}"
+            ]
+        ),
         f"export VC_FRAME_CONFIG_DIR={shlex_quote(str(frame_config))}",
     ]
     for name, value in sorted((environment or {}).items()):
@@ -20906,38 +21130,46 @@ def _reconcile_runtime_preference(
             else:
                 manifest, manifest_error = _load_runtime_generation_manifest(old_root)
                 if manifest is None:
-                    raise ValueError(
-                        manifest_error or "previous generation manifest is invalid"
-                    )
-                raw = baseline_source.read_bytes()
-                digest = hashlib.sha256(raw).hexdigest()
-                expected_digest = (
-                    old.get("sha256")
-                    or manifest["hashes"].get(relative.as_posix())
-                    or previous.get("owned_files", {}).get(str(destination))
-                )
-                bound_digest = manifest["hashes"].get(relative.as_posix())
-                trusted = bool(expected_digest) and digest == expected_digest
-                if bound_digest and digest != bound_digest:
-                    trusted = False
-                if trusted:
-                    baseline = raw.decode("utf-8")
-                elif choice in PREFERENCE_CHOICES:
-                    # Historical receipts omit hashes for some preference files,
-                    # and some generations hold user copies of those defaults.
-                    # Unproven bytes cannot be a three-way baseline; a bound
-                    # keep-current/use-incoming retry still resolves the user file.
-                    baseline = None
-                elif expected_digest and digest != expected_digest:
-                    raise ValueError(
-                        "previous shipped defaults differ from their receipt"
-                    )
-                elif bound_digest and digest != bound_digest:
-                    raise ValueError(
-                        "previous shipped defaults differ from their manifest"
-                    )
+                    # An older generation's closed manifest predates this schema, so
+                    # its bytes prove no baseline. That leaves the user's file
+                    # unresolved, not unresolvable: identical bytes need no merge,
+                    # and a bound keep-current/use-incoming still decides the file.
+                    if current_raw == incoming.encode("utf-8"):
+                        baseline = incoming
+                    elif choice not in PREFERENCE_CHOICES:
+                        raise ValueError(
+                            manifest_error or "previous generation manifest is invalid"
+                        )
                 else:
-                    raise ValueError("previous shipped defaults are unavailable")
+                    raw = baseline_source.read_bytes()
+                    digest = hashlib.sha256(raw).hexdigest()
+                    expected_digest = (
+                        old.get("sha256")
+                        or manifest["hashes"].get(relative.as_posix())
+                        or previous.get("owned_files", {}).get(str(destination))
+                    )
+                    bound_digest = manifest["hashes"].get(relative.as_posix())
+                    trusted = bool(expected_digest) and digest == expected_digest
+                    if bound_digest and digest != bound_digest:
+                        trusted = False
+                    if trusted:
+                        baseline = raw.decode("utf-8")
+                    elif choice in PREFERENCE_CHOICES:
+                        # Historical receipts omit hashes for some preference files,
+                        # and some generations hold user copies of those defaults.
+                        # Unproven bytes cannot be a three-way baseline; a bound
+                        # keep-current/use-incoming retry still resolves the user file.
+                        baseline = None
+                    elif expected_digest and digest != expected_digest:
+                        raise ValueError(
+                            "previous shipped defaults differ from their receipt"
+                        )
+                    elif bound_digest and digest != bound_digest:
+                        raise ValueError(
+                            "previous shipped defaults differ from their manifest"
+                        )
+                    else:
+                        raise ValueError("previous shipped defaults are unavailable")
         current = current_raw.decode("utf-8") if current_raw is not None else None
         if (
             destination.name == "terminal-policy.toml"
@@ -21062,6 +21294,28 @@ def _preference_choice_for_path(
     if destination == selected or destination.name == selected.name:
         return choice
     return None
+
+
+def _carried_preference_choice(
+    binding: Any, destination: Path, incoming_source: Path
+) -> tuple[str | None, str | None, str | None]:
+    """Replay an earlier attempt's bound choice only for unchanged bytes."""
+    if not isinstance(binding, dict) or binding.get("choice") not in PREFERENCE_CHOICES:
+        return None, None, None
+    current_sha256 = binding.get("current_sha256")
+    incoming_sha256 = binding.get("incoming_sha256")
+    try:
+        if (
+            destination.is_symlink()
+            or not destination.is_file()
+            or not incoming_source.is_file()
+            or _sha256_path(destination) != current_sha256
+            or _sha256_path(incoming_source) != incoming_sha256
+        ):
+            return None, None, None
+    except OSError:
+        return None, None, None
+    return binding["choice"], current_sha256, incoming_sha256
 
 
 def _recovery_receipt_snapshot(previous: Mapping[str, Any]) -> dict[str, Any]:
@@ -21210,12 +21464,15 @@ def _abandon_unpublished_preference_conflicts(
     runtime_home: Path,
     receipt: dict[str, Any],
     conflicts: list[dict[str, Any]],
+    resolutions: Mapping[str, Mapping[str, str]] | None = None,
 ) -> bool:
     """Restore a published receipt so a candidate conflict cannot poison it.
 
     `config_conflicts` remains the poison key `runtime-resolve` already
     understands. A refused unpublished upgrade records `candidate_conflicts`
-    instead, which older resolvers ignore.
+    instead, which older resolvers ignore. `candidate_resolutions` keeps the
+    hash-bound choices this attempt accepted, so the next attempt can settle
+    the remaining files instead of asking about the same one again.
     """
     unpublished = bool(receipt.get("install_pending")) or receipt.get(
         "install_phase"
@@ -21231,6 +21488,12 @@ def _abandon_unpublished_preference_conflicts(
         previous_available = False
     receipt.pop("config_conflicts", None)
     receipt["candidate_conflicts"] = conflicts
+    if resolutions:
+        receipt["candidate_resolutions"] = {
+            path: dict(binding) for path, binding in resolutions.items()
+        }
+    else:
+        receipt.pop("candidate_resolutions", None)
     _checkpoint_runtime_install_receipt(runtime_home, receipt)
     return previous_available
 
@@ -21259,12 +21522,24 @@ def _prepare_runtime_preferences(
     """
     prepared: dict[Path, dict[str, Any]] = {}
     conflicts: list[dict[str, Any]] = []
+    carried = previous.get("candidate_resolutions")
+    carried = carried if isinstance(carried, dict) else {}
+    accepted: dict[str, dict[str, str]] = {}
     for destination, relative in _runtime_preference_sources(product_config).items():
         if not (generation / relative).is_file() and sys.platform == "win32":
             continue
         file_choice = _preference_choice_for_path(
             destination, choice=choice, choice_path=choice_path
         )
+        bound_current = expected_current_sha256 if file_choice else None
+        bound_incoming = expected_incoming_sha256 if file_choice else None
+        if file_choice is None:
+            # One choice per attempt is all the App and CLI can send. A choice
+            # an earlier attempt accepted still binds this file, but only while
+            # both the user's bytes and the incoming default are unchanged.
+            file_choice, bound_current, bound_incoming = _carried_preference_choice(
+                carried.get(str(destination)), destination, generation / relative
+            )
         outcome = _reconcile_runtime_preference(
             destination,
             relative,
@@ -21272,8 +21547,8 @@ def _prepare_runtime_preferences(
             runtime_home=runtime_home,
             previous=previous,
             choice=file_choice,
-            expected_current_sha256=expected_current_sha256 if file_choice else None,
-            expected_incoming_sha256=expected_incoming_sha256 if file_choice else None,
+            expected_current_sha256=bound_current,
+            expected_incoming_sha256=bound_incoming,
         )
         if outcome["error"] is not None:
             # Reuse the installer's backup and receipt, without installing a
@@ -21297,11 +21572,18 @@ def _prepare_runtime_preferences(
             "defaults": outcome["defaults"],
             "user_override_keys": outcome["user_override_keys"],
         }
+        if file_choice is not None and bound_current and bound_incoming:
+            accepted[str(destination)] = {
+                "choice": file_choice,
+                "current_sha256": bound_current,
+                "incoming_sha256": bound_incoming,
+            }
     if conflicts:
         previous_available = _abandon_unpublished_preference_conflicts(
             runtime_home=runtime_home,
             receipt=receipt,
             conflicts=conflicts,
+            resolutions=accepted,
         )
         if not previous_available:
             previous_available = _previous_runtime_is_available(runtime_home, previous)
@@ -23632,7 +23914,9 @@ def _runtime_rescue_verify_destination(
             if not path.is_dir() or path.is_symlink():
                 errors.append(f"owned directory is missing or not a directory: {path}")
         expected_names = set(_RUNTIME_WRAPPER_VERBS)
-        expected_names.update({"vc-terminal", SECURE_WALKAROUND_LAUNCHER})
+        expected_names.add(SECURE_WALKAROUND_LAUNCHER)
+        if sys.platform != "darwin":
+            expected_names.add("vc-terminal")
         bin_dir = generation / "bin"
         if bin_dir.is_dir():
             expected_names.update(_runtime_published_launcher_names(bin_dir))
@@ -24855,6 +25139,9 @@ def _load_local_skill_owner() -> Any:
     module = types.ModuleType("_vc_local_skill_owner")
     module.__file__ = str(module_path)
     source = _capture_runtime_bound_file(module_path)
+    # The code is the bytes captured above from the generation's own owner;
+    # an import loader would reopen the path and write __pycache__ into it.
+    # nosemgrep: python.lang.security.audit.exec-detected.exec-detected
     exec(compile(source, str(module_path), "exec"), module.__dict__)  # noqa: S102
     return module
 
@@ -25508,6 +25795,8 @@ def _runtime_launcher_public_name(name: str) -> str | None:
             base = base[: -len(suffix)]
             lowered = base.lower()
             break
+    if sys.platform == "darwin" and lowered in {"vc-terminal", "vc-frame"}:
+        return None
     if (
         lowered.startswith(_RUNTIME_NAMESPACE_PREFIXES)
         or lowered in _RUNTIME_NAMESPACE_NAMES
@@ -25518,10 +25807,9 @@ def _runtime_launcher_public_name(name: str) -> str | None:
 
 def _runtime_published_launcher_names(bin_dir: Path) -> set[str]:
     """Launcher names the current install publishes into the launcher home."""
-    names = {
-        launcher_name("vc-terminal"),
-        *(launcher_name(name) for name in _RUNTIME_WRAPPER_VERBS),
-    }
+    names = {launcher_name(name) for name in _RUNTIME_WRAPPER_VERBS}
+    if sys.platform != "darwin":
+        names.add(launcher_name("vc-terminal"))
     names.add(launcher_name(SECURE_WALKAROUND_LAUNCHER))
     for entry in bin_dir.iterdir():
         if not entry.is_file():
@@ -25544,7 +25832,18 @@ def _restore_receipt_collision_backup(
     if not _receipt_backup_path_is_allowed(backup, runtime_home / ".installer-backups"):
         raise RuntimeError(f"receipt backup path escapes backup root: {backup}")
     if _path_present(backup):
-        _restore_path_from_backup(backup, stale)
+        if backup.is_dir() and not backup.is_symlink():
+            raise RuntimeInstallRefusal(
+                f"Launcher backup is a directory; inspect {backup} before retrying."
+            )
+        # Stage on the destination filesystem, then rename over the old name.
+        # Readers see either complete launcher, never an unlink/copy gap.
+        with tempfile.TemporaryDirectory(
+            prefix=".launcher-restore-", dir=stale.parent
+        ) as raw:
+            staged = Path(raw) / stale.name
+            _copy_path_to_backup(backup, staged)
+            os.replace(staged, stale)
         # Keep the source snapshot: a crash may precede the receipt checkpoint.
 
 
@@ -25555,12 +25854,13 @@ def _reclaim_foreign_launcher_names(
     runtime_home: Path,
     receipt: dict[str, Any],
     previous: Mapping[str, Any],
+    admitted_frame: Path | None = None,
 ) -> list[Path]:
     """Retire launchers a previous generation published but this one no longer
     publishes — legacy bare shims and `vibecrafted-<tool>` wrappers alike.
 
     Receipt-gated: only paths the previous receipt owns are considered. A
-    byte-identical file is removed and its collision backup (if any) restored,
+    byte-identical file is atomically replaced by its collision backup (if any),
     so the pre-Vibecrafted owner of a public name resurfaces. A bare foreign
     name whose bytes moved on is left untouched — that is the user's own
     install now (canonical releases land there), and its stale ownership and
@@ -25581,6 +25881,40 @@ def _reclaim_foreign_launcher_names(
         if stale.parent != launcher_home or stale.name in published:
             continue
         backup_raw = receipt.setdefault("backups", {}).get(stale_key)
+        if stale.name == "vc-frame" and sys.platform == "darwin":
+            if admitted_frame is None:
+                # Reclamation is never authority to remove an unprovisioned frame.
+                continue
+            owned = (
+                not stale.is_symlink()
+                and stale.is_file()
+                and previous_owned.get(stale_key) == _sha256_path(stale)
+            ) or (
+                stale.is_symlink()
+                and stale_key in previous_links
+                and _symlink_target(stale)
+                == Path(previous_links[stale_key]).resolve(strict=False)
+            )
+            if owned or not _path_present(stale):
+                with tempfile.TemporaryDirectory(
+                    prefix=".frame-handoff-", dir=launcher_home
+                ) as raw:
+                    staged = Path(raw) / "vc-frame"
+                    staged.symlink_to(admitted_frame)
+                    os.replace(staged, stale)
+            # In particular, keep Band C's newly managed link. Its ownership
+            # and any old collision backup must not be reclaimed on uninstall.
+            receipt.setdefault("owned_files", {}).pop(stale_key, None)
+            receipt.setdefault("owned_symlinks", {}).pop(stale_key, None)
+            receipt.setdefault("backups", {}).pop(stale_key, None)
+            if backup_raw:
+                history = receipt.setdefault("drift_backup_history", {}).setdefault(
+                    stale_key, []
+                )
+                if backup_raw not in history:
+                    history.append(backup_raw)
+            retired.append(stale)
+            continue
         if not _path_present(stale):
             if stale_key not in previous_owned:
                 continue
@@ -25601,10 +25935,9 @@ def _reclaim_foreign_launcher_names(
             identical = _symlink_target(stale) == Path(
                 previous_links[stale_key]
             ).resolve(strict=False)
-        ours_regardless = (
-            stale.name.startswith(_RUNTIME_NAMESPACE_PREFIXES)
-            or stale.name in _RUNTIME_NAMESPACE_NAMES
-        )
+        # Publication and retirement share one owner map. Independent Darwin
+        # products are foreign even though their historical names start vc-.
+        ours_regardless = _runtime_launcher_public_name(stale.name) is not None
         if not identical and not ours_regardless:
             occupant = _runtime_owned_occupant_state(stale)
             receipt.setdefault("owned_files", {}).pop(stale_key, None)
@@ -25644,14 +25977,16 @@ def _reclaim_foreign_launcher_names(
                 retired.append(stale)
                 receipt.setdefault("owned_files", {}).pop(stale_key, None)
                 continue
-        _remove_path(stale)
-        retired.append(stale)
-        receipt.setdefault("owned_files", {}).pop(stale_key, None)
-        backup_raw = receipt.setdefault("backups", {}).pop(stale_key, None)
         if backup_raw:
             _restore_receipt_collision_backup(
                 stale, backup_raw, runtime_home=runtime_home
             )
+        else:
+            # This retired alias has no replacement; no delete/create cycle.
+            _remove_path(stale)
+        retired.append(stale)
+        receipt.setdefault("owned_files", {}).pop(stale_key, None)
+        receipt.setdefault("backups", {}).pop(stale_key, None)
     _checkpoint_runtime_install_receipt(runtime_home, receipt)
     return retired
 
@@ -26098,21 +26433,32 @@ def _runtime_install_result(
     generation: Path,
     app_root: Path | None,
     paths: Mapping[str, Path],
+    require_products: bool = True,
 ) -> dict[str, Any]:
     product_config = paths["product_config"]
+    states = _external_products().product_status() if sys.platform == "darwin" else {}
+    terminal_host = (
+        _product_terminal_host(generation=generation, app_root=app_root)
+        if require_products or sys.platform != "darwin"
+        else Path(_external_products().terminal_host.STANDALONE_HOST)
+    )
+    frame = (
+        str(_product_frame(generation))
+        if require_products or sys.platform != "darwin"
+        else states.get("vc-frame", {}).get("path", "")
+    )
     result = {
         "schema": "vibecrafted.runtime-install-result.v1",
+        "external_products": states,
         "root": str(generation),
         "launcher": str(paths["launcher_home"] / "vibecrafted"),
         "terminal": str(generation / "bin/vc-terminal"),
-        "terminal_host": str(
-            _product_terminal_host(generation=generation, app_root=app_root)
-        ),
+        "terminal_host": str(terminal_host),
         # AppDelegate exports this as VIBECRAFTED_VC_FRAME_BIN for the public
         # product entry. Point it at the native provider, never back at the
         # wrapper itself, or the first `vc-frame ls` recursively execs the
         # wrapper forever.
-        "frame": str(generation / "libexec/vc-frame"),
+        "frame": frame,
         "start": str(generation / "bin/vc-start"),
         "primary_shell": str(
             product_config / "vc-terminal" / "launch-primary-shell.zsh"
@@ -26261,12 +26607,18 @@ def cmd_runtime_resolve(args: argparse.Namespace) -> int:
                 "bin/vc-server-supervisor",
             )
             for relative in required_executables:
+                if sys.platform == "darwin" and relative.startswith("libexec/"):
+                    continue
                 path = generation / relative
                 if not path.is_file() or not os.access(path, os.X_OK):
                     raise RuntimeError(
                         f"selected generation entry is unusable: {relative}"
                     )
-            for relative in ("libexec/vc-terminal", "libexec/vc-frame"):
+            for relative in (
+                ()
+                if sys.platform == "darwin"
+                else ("libexec/vc-terminal", "libexec/vc-frame")
+            ):
                 if not _is_native_executable(generation / relative):
                     raise RuntimeError(f"selected native host is unusable: {relative}")
             if not (generation / "scripts/vetcoders_install.py").is_file():
@@ -26330,8 +26682,14 @@ def cmd_runtime_resolve(args: argparse.Namespace) -> int:
             required_owned = (
                 active_path,
                 paths["launcher_home"] / "vibecrafted",
-                paths["launcher_home"] / "vc-terminal",
-                paths["launcher_home"] / "vc-frame",
+                *(
+                    []
+                    if sys.platform == "darwin"
+                    else [
+                        paths["launcher_home"] / "vc-terminal",
+                        paths["launcher_home"] / "vc-frame",
+                    ]
+                ),
                 product / "vc-terminal/vc-terminal.toml",
                 product / "vc-terminal/launch-primary-shell.zsh",
             )
@@ -26350,7 +26708,11 @@ def cmd_runtime_resolve(args: argparse.Namespace) -> int:
                         f"required product entry is not executable: {path.name}"
                     )
             resolve_app_root = _receipt_app_root(receipt)
-            for name in ("vibecrafted", "vc-terminal", "vc-frame"):
+            for name in (
+                ("vibecrafted",)
+                if sys.platform == "darwin"
+                else ("vibecrafted", "vc-terminal", "vc-frame")
+            ):
                 expected = _runtime_launcher_body(
                     generation=generation,
                     config_home=paths["config_home"],
@@ -27988,13 +28350,16 @@ def _runtime_pack_required_paths(generation: Path, terminal_host: Path) -> list[
         generation / "bin/vibecrafted",
         generation / "bin/vibecrafted-mcp",
         generation / "bin/vc-frame",
-        generation / "libexec/vc-frame",
         generation / "bin/vc-server",
         generation / "bin/vc-server-supervisor",
         generation / "bin/vc-start",
         generation / "bin/vc-workflow",
         generation / "bin/vc-terminal",
-        terminal_host,
+        *(
+            []
+            if sys.platform == "darwin"
+            else [terminal_host, generation / "libexec/vc-frame"]
+        ),
         generation / "config/alacritty/launch-primary-shell.zsh",
         skills,
     ]
@@ -28064,7 +28429,21 @@ def cmd_runtime_install(args: argparse.Namespace) -> int:
         # fd and its service mutation bounces off this process's own lease.
         os.set_inheritable(descriptor, True)
         with _inherited_tools_install_lease(descriptor):
-            return _install_runtime_pack(args)
+            try:
+                return _install_runtime_pack(args)
+            except BaseException:
+                # Preparation can fail before the transaction owner is entered.
+                # Restore its prior receipt too, so readers do not see a healthy
+                # old generation as permanently install_pending after refusal.
+                pending = _load_runtime_install_receipt(
+                    _runtime_receipt_path(paths["runtime_home"])
+                )
+                if pending.get("install_phase") == "preparing":
+                    _rollback_runtime_config_transaction(paths, pending)
+                    saved = pending.get("preparing_previous_receipt")
+                    if isinstance(saved, dict):
+                        _restore_runtime_publication_receipt(paths, pending, saved)
+                raise
 
 
 def _verify_local_skill_install_resume(
@@ -28146,9 +28525,11 @@ def _install_runtime_pack(
         raise RuntimeInstallRefusal(f"invalid Runtime Pack VERSION: {version!r}")
     _assert_runtime_tree_has_no_symlinks(payload_root)
 
-    # Admission precedes rescue/config staging, selector publication and service
-    # activation. A pack-only upgrade may require a Founder-gated matching app.
-    _product_terminal_host(generation=payload_root, app_root=app_root)
+    # Reject carried products before staging or writing an install receipt.
+    # Admission comes from this carrier, never the selected older runtime.
+    _refuse_embedded_darwin_products(payload_root)
+    if sys.platform != "darwin":
+        _product_terminal_host(generation=payload_root, app_root=app_root)
 
     paths = _runtime_install_paths(getattr(args, "runtime_home", None))
     runtime_home = paths["runtime_home"]
@@ -28265,6 +28646,31 @@ def _install_runtime_pack(
     previous_healthy = False
     if previous and previous.get("version") != version and not rescue_record:
         previous_healthy, _ = _runtime_rescue_verify_destination(paths)
+    # S2/S4: admit prerequisites before writing a pending receipt or selectors.
+    external_products = (
+        _admit_external_products(payload_root, paths=paths, previous=previous)
+        if sys.platform == "darwin"
+        else {}
+    )
+    foundations = None
+    if sys.platform == "darwin":
+        foundations = _ensure_foundations_installed(
+            payload_root,
+            skip=bool(getattr(args, "skip_foundations", False)),
+            # Preserve the default required channels without running the old
+            # post-publication cockpit check or optional agent/plugin setup.
+            targets=("loctree", "aicx"),
+            environment={
+                "VIBECRAFTED_SOURCE": str(payload_root),
+                "VIBECRAFTED_RUNTIME_HOME": str(runtime_home),
+                "VIBECRAFTED_LAUNCHER_BIN": str(paths["launcher_home"]),
+            },
+        )
+    if foundations is not None and foundations["status"] == "failed":
+        raise RuntimeInstallRefusal(
+            "Required foundations could not be admitted; correct the foundation "
+            "failure shown above and retry Upgrade."
+        )
     previous_created = previous.get("roots_created", {})
     root_created = {
         name: bool(previous_created.get(name)) or not path.exists()
@@ -28603,7 +29009,9 @@ def _install_runtime_pack(
             generation=generation, app_root=app_root
         ),
     )
-    if _runtime_payload_present(generation_terminal_entry) or sys.platform != "win32":
+    if sys.platform != "darwin" and (
+        _runtime_payload_present(generation_terminal_entry) or sys.platform != "win32"
+    ):
         stage_launcher(terminal_launcher, terminal_body)
 
     deck = _runtime_bin_file(generation, "vibecrafted")
@@ -28716,6 +29124,7 @@ def _install_runtime_pack(
         runtime_home=runtime_home,
         receipt=receipt,
         previous=previous,
+        admitted_frame=Path(external_products["frame"]) if external_products else None,
     )
     foundation_service_actions = _repoint_foundation_service_dependents(
         retired_launchers,
@@ -28732,6 +29141,7 @@ def _install_runtime_pack(
         generation=generation,
         app_root=app_root,
         paths=paths,
+        require_products=False,
     )
     result["foundation_service_actions"] = foundation_service_actions
     result["tools_current"] = str(current_link)
@@ -28753,15 +29163,23 @@ def _install_runtime_pack(
     )
     if not rescue_record:
         result["retirement"] = _finish_runtime_retirement(paths, receipt)
-    foundations = _ensure_foundations_installed(
-        generation,
-        skip=bool(getattr(args, "skip_foundations", False)),
-    )
+    if foundations is None:
+        # Other platforms retain their existing foundations lifecycle.
+        foundations = _ensure_foundations_installed(
+            generation,
+            skip=bool(getattr(args, "skip_foundations", False)),
+        )
     result["foundations"] = foundations
+    if external_products:
+        result["terminal_host"] = external_products["terminal"]
+        result["frame"] = external_products["frame"]
+        result["external_products"] = {
+            "vc-" + product: {"status": "available", "path": path}
+            for product, path in external_products.items()
+        }
     if emit_result:
         print(json.dumps(result, sort_keys=True))
-    # The runtime generation stays published either way; a red exit here means
-    # "installed, but not a complete product" so wrappers cannot claim success.
+    # Darwin prerequisite failures have already refused before publication.
     return (
         0
         if not projection_conflicts
@@ -28807,15 +29225,108 @@ def _foundations_failure_diagnostic(stdout: str, stderr: str) -> str:
     return _redact_foundation_diagnostic("\n".join(chunks))
 
 
-def _ensure_foundations_installed(generation: Path, *, skip: bool) -> dict[str, Any]:
-    """Drive the bundled foundations installer after the runtime transaction.
+def _admit_external_products(
+    payload_root: Path,
+    *,
+    paths: Mapping[str, Path],
+    previous: Mapping[str, Any],
+) -> dict[str, str]:
+    """S2: the carrier probes, installs missing products, then probes again.
+
+    Every probe goes through ``_external_products()``, the one owner every other
+    product decision in this installer reads. The Applications bundle is
+    derived from that owner's ``STANDALONE_HOST`` rather than a second literal,
+    so admission, publication and their doubles can never disagree.
+    """
+    environment = {
+        **os.environ,
+        "VIBECRAFTED_SOURCE": str(payload_root),
+        "VIBECRAFTED_RUNTIME_HOME": str(paths["runtime_home"]),
+        "VIBECRAFTED_LAUNCHER_BIN": str(paths["launcher_home"]),
+        "PATH": str(paths["launcher_home"]) + os.pathsep + os.environ.get("PATH", ""),
+        # Never accept a caller's hash or hash today's occupant to invent ownership.
+        "VIBECRAFTED_LEGACY_VCFRAME_SHA256": "",
+    }
+    legacy = previous.get("owned_files", {}).get(
+        str(paths["launcher_home"] / "vc-frame")
+    )
+    if isinstance(legacy, str) and re.fullmatch(r"[0-9a-f]{64}", legacy):
+        environment["VIBECRAFTED_LEGACY_VCFRAME_SHA256"] = legacy
+    search_path = environment["PATH"]
+
+    def probe(product: str) -> Path:
+        # Load the owner per probe: an install in between must be seen fresh.
+        products = _external_products()
+        if product == "terminal":
+            return Path(products.resolve_terminal())
+        return Path(products.resolve_frame(search_path=search_path))
+
+    admitted = {}
+    for product, target in (("terminal", "vc-terminal"), ("frame", "vc-frame")):
+        try:
+            try:
+                found = probe(product)
+            except RuntimeError as refusal:
+                print(_redact_foundation_diagnostic(str(refusal)), file=sys.stderr)
+                # Existing unadmitted terminal apps belong to the Founder.
+                app = Path(_external_products().terminal_host.STANDALONE_HOST).parents[
+                    2
+                ]
+                if product == "terminal" and (app.exists() or app.is_symlink()):
+                    raise RuntimeInstallRefusal(
+                        f"Existing {app} was not admitted; install a compatible "
+                        "signed and notarized vc-terminal app explicitly, then "
+                        "retry Upgrade."
+                    ) from refusal
+                installed = _ensure_foundations_installed(
+                    payload_root,
+                    skip=False,
+                    targets=(target,),
+                    environment=environment,
+                )
+                if installed["status"] != "installed":
+                    raise RuntimeInstallRefusal(
+                        f"Could not install {target}; correct the foundation failure "
+                        "shown above and retry Upgrade."
+                    ) from refusal
+                try:
+                    found = probe(product)
+                except RuntimeError as still_refused:
+                    print(
+                        _redact_foundation_diagnostic(str(still_refused)),
+                        file=sys.stderr,
+                    )
+                    raise RuntimeInstallRefusal(
+                        f"{target} is not admitted by this carrier; install the "
+                        "compatible signed product shown above and retry Upgrade."
+                    ) from still_refused
+        except OSError as exc:
+            raise RuntimeInstallRefusal(
+                f"Could not verify {target}; restore its signed installer and retry Upgrade."
+            ) from exc
+        if not found.is_absolute():
+            raise RuntimeInstallRefusal(
+                f"{target} is not admitted by this carrier; install the compatible "
+                "signed product shown above and retry Upgrade."
+            )
+        admitted[product] = str(found)
+    return admitted
+
+
+def _ensure_foundations_installed(
+    generation: Path,
+    *,
+    skip: bool,
+    targets: Sequence[str] = (),
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Drive the carrier's bundled foundations installer before publication.
 
     No install scenario may finish green without AICX, Loctree, Screenscribe
     and PRView (Vetcoders decision, 2026-10-07). The pack never carries the foundations
     themselves — it carries their installer, and each foundation comes from
-    its own public channel (npm, GitHub releases, PyPI). A failure here does
-    not undo the already-published runtime generation; it fails the install's
-    exit code so no wrapper can report success without the foundations.
+    its own public channel (npm, GitHub releases, PyPI). The caller refuses
+    publication on failure; external products cannot be waived by skip.
     """
     script = generation / "scripts" / "install-foundations.sh"
     record: dict[str, Any] = {
@@ -28836,20 +29347,34 @@ def _ensure_foundations_installed(generation: Path, *, skip: bool) -> dict[str, 
     if not script.is_file():
         record["status"] = "failed"
         record["reason"] = "this Runtime Pack does not bundle install-foundations.sh"
+        print(f"{record['reason']}: {script}", file=sys.stderr)
         return record
     try:
         proc = subprocess.run(
-            ["bash", str(script)],
+            ["bash", str(script), *targets],
             capture_output=True,
             text=True,
             timeout=1800,
             check=False,
+            # The external-product resolvers run under this installer's own
+            # interpreter, never an unrelated python3 found on PATH.
+            env={
+                **os.environ,
+                **(environment or {}),
+                "VIBECRAFTED_PYTHON": sys.executable,
+            },
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         record["status"] = "failed"
         record["reason"] = f"foundations installer did not complete: {exc}"
+        print(_redact_foundation_diagnostic(record["reason"]), file=sys.stderr)
         return record
     record["exit_code"] = proc.returncode
+    # S1 consumes the WHOLE stdout as one JSON document. Child banners and
+    # diagnostics belong on stderr, including successful installations.
+    for output in (proc.stdout, proc.stderr):
+        if output:
+            print(_redact_foundation_diagnostic(output), file=sys.stderr)
     stdout_lines = (proc.stdout or "").splitlines()
     stderr_lines = (proc.stderr or "").splitlines()
     tail = "\n".join(stdout_lines[-12:])
@@ -29754,7 +30279,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_runtime_install(args)
         except PreferenceConflict as exc:
             print(json.dumps(exc.envelope, sort_keys=True))
+            print(
+                "Runtime preferences need a choice; resolve the reported conflict and retry Upgrade.",
+                file=sys.stderr,
+            )
             return 2
+        # Refusals only: a programming fault stays a visible traceback.
         except (RuntimeInstallRefusal, FileNotFoundError, PermissionError) as exc:
             print(
                 json.dumps(
@@ -29768,6 +30298,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
+            reason = " ".join(_redact_foundation_diagnostic(str(exc)).split())
+            # One actionable sentence ends stderr; never append a second one.
+            if not reason.endswith("retry Upgrade."):
+                reason = f"{reason} Correct the reported problem and retry Upgrade."
+            print(reason, file=sys.stderr)
             return 2
     elif args.command == "runtime-resolve":
         return cmd_runtime_resolve(args)

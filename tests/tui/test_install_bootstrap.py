@@ -41,6 +41,7 @@ FIXTURE_REQUIRED_FILES = {
     "scripts/installer_brand.py",
     "scripts/install-foundations.sh",
     "scripts/lib/runtime-roots.sh",
+    "scripts/lib/app-main-identity.py",
     "scripts/vetcoders_install.py",
     "scripts/vibecrafted",
     "scripts/verify-vibecrafted-product.sh",
@@ -90,7 +91,10 @@ def _materialize_complete_distribution_fixture(source_dir: Path) -> None:
         path = source_dir / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
-            path.write_text(f"fixture: {relative}\n", encoding="utf-8")
+            if relative == "scripts/lib/app-main-identity.py":
+                shutil.copy2(REPO_ROOT / relative, path)
+            else:
+                path.write_text(f"fixture: {relative}\n", encoding="utf-8")
 
 
 def _fixture_tree_record(source_dir: Path) -> dict[str, object]:
@@ -484,6 +488,12 @@ fi
     )
 
 
+def _pack_route_foundations(*, macos: bool = sys.platform == "darwin") -> list[str]:
+    """What install.sh hands install-foundations.sh after the pack route."""
+    products = ["vc-frame", *(["vc-terminal"] if macos else [])]
+    return ["loctree", "aicx", "prview", "screenscribe", *products]
+
+
 @pytest.mark.parametrize("sums_shape", ["listed", "unlisted", "mismatch"])
 def test_channel_archive_checksum_is_matched_by_release_name(
     tmp_path: Path, sums_shape: str
@@ -568,7 +578,7 @@ def test_channel_archive_checksum_is_matched_by_release_name(
         ]
         assert (tmp_path / "foundations-args.txt").read_text(
             encoding="utf-8"
-        ).splitlines() == ["loctree", "aicx", "prview", "screenscribe"]
+        ).splitlines() == _pack_route_foundations(macos=False)  # uname says Linux
         return
 
     expected = {
@@ -924,12 +934,16 @@ def test_bootstrap_rejects_member_mutation_with_unchanged_carrier(
     assert not marker.exists(), "candidate helper ran before member digest rejection"
 
 
+@pytest.mark.parametrize(
+    "missing_file", ["LICENSE", "scripts/lib/app-main-identity.py"]
+)
 def test_bootstrap_rejects_digest_consistent_incomplete_shape_before_helper(
     tmp_path: Path,
+    missing_file: str,
 ) -> None:
     marker = tmp_path / "stage-ran.txt"
     source_dir = _minimal_v2_source(tmp_path, stage_marker=marker)
-    (source_dir / "LICENSE").unlink()
+    (source_dir / missing_file).unlink()
     provenance_path = source_dir / "source-provenance.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     provenance["payload"] = _fixture_tree_record(source_dir)
@@ -937,13 +951,13 @@ def test_bootstrap_rejects_digest_consistent_incomplete_shape_before_helper(
         json.dumps(provenance, ensure_ascii=True, sort_keys=True, indent=2) + "\n",
         encoding="utf-8",
     )
-    archive_path = tmp_path / "missing-license.tar.gz"
+    archive_path = tmp_path / "missing-required-file.tar.gz"
     _write_v2_archive(source_dir, archive_path, "vibecrafted-main")
 
     result = _bootstrap_archive(tmp_path, archive_path)
 
     assert result.returncode != 0
-    assert "missing required file: LICENSE" in result.stderr
+    assert f"missing required file: {missing_file}" in result.stderr
     assert not marker.exists(), "candidate helper ran before shape rejection"
 
 
@@ -1660,12 +1674,9 @@ def test_install_sh_supplied_pack_installs_without_make(
     assert (tmp_path / "pack-installer-args.txt.pack").read_text().strip() == str(
         fixture["pack"]
     )
-    assert (tmp_path / "foundations-args.txt").read_text().splitlines() == [
-        "loctree",
-        "aicx",
-        "prview",
-        "screenscribe",
-    ]
+    assert (
+        tmp_path / "foundations-args.txt"
+    ).read_text().splitlines() == _pack_route_foundations()
 
 
 def test_install_sh_pack_route_failure_is_the_installers_verdict(
@@ -1783,9 +1794,11 @@ def test_pack_route_mirrors_the_makefile_install_recipe() -> None:
     assert (
         "bash scripts/install-foundations.sh loctree aicx prview screenscribe" in recipe
     )
-    assert (
-        "bash scripts/install-foundations.sh loctree aicx prview screenscribe" in route
-    )
+    # The route asks the recipe's channels plus the external products it must
+    # provision (vc-frame everywhere, vc-terminal on macOS), in one call.
+    assert "local foundations=(loctree aicx prview screenscribe vc-frame)" in route
+    assert "foundations+=(vc-terminal)" in route
+    assert 'bash scripts/install-foundations.sh "${foundations[@]}"' in route
 
 
 def test_install_sh_gui_hands_the_chosen_pack_to_the_gui_installer(

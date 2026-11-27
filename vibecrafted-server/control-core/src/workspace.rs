@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 use serde::Deserialize;
 
@@ -22,6 +23,11 @@ use crate::ControlPlane;
 const CATALOG_SCHEMA: &str = "vibecrafted.workspace-catalog.v1";
 const WORKSPACE_SCHEMA: &str = "vibecrafted.workspace.v1";
 const SESSION_SCHEMA: &str = "vibecrafted.workspace-session.v1";
+/// Session records read per projection. Writers never delete a record, so the
+/// directory only grows. The newest records by modification time are read;
+/// older ones are history and are skipped. Exceeding the bound once refused
+/// the whole projection, and the App showed no projects at all (Maciej,
+/// 2026-11-23: 201 records, 145 of them older than 30 days).
 const SESSION_LIMIT: usize = 200;
 const FRAME_RUNTIME: &str = "vc-frame";
 const FRAME_CONTRACT_DIR_PREFIX: &str = "contract_version_";
@@ -349,16 +355,16 @@ impl ControlPlane {
                             path.display()
                         )));
                     }
-                    paths.push(path);
+                    // A writer replaces the record on every attachment change,
+                    // so its mtime is the session's last recorded activity.
+                    let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+                    paths.push((modified, path));
                 }
             }
-            if paths.len() > SESSION_LIMIT {
-                return Err(WorkspaceProjectionError::Invalid(format!(
-                    "workspace session count exceeds the bounded projection limit ({SESSION_LIMIT})"
-                )));
-            }
-            paths.sort();
-            for path in paths {
+            paths.sort_by(|(left_at, left), (right_at, right)| {
+                right_at.cmp(left_at).then_with(|| left.cmp(right))
+            });
+            for (_, path) in paths.into_iter().take(SESSION_LIMIT) {
                 let session: WorkspaceSession = read_json(&path)?;
                 validate_session(&session)?;
                 sessions.push(session);
@@ -464,10 +470,11 @@ impl RuntimeSessionAttachment {
     fn owner_freshness(&self) -> Option<(i64, &str)> {
         if let Some(identity) = &self.worker_identity {
             let token = identity.start_token.trim();
-            if let Some(pid) = identity.pid {
-                if pid > 0 && !token.is_empty() {
-                    return Some((pid, token));
-                }
+            if let Some(pid) = identity.pid
+                && pid > 0
+                && !token.is_empty()
+            {
+                return Some((pid, token));
             }
         }
         let token = self.start_token.trim();
@@ -613,6 +620,7 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let unique = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir -- test scratch under a name unique to this process
         std::env::temp_dir().join(format!(
             "vc-workspace-projection-{}-{nonce}-{unique}",
             std::process::id()
@@ -969,6 +977,54 @@ mod tests {
             by_id[hex_id("0198f84e-1111-7abc-8def-", 22).as_str()],
             SessionCurrency::Unknown
         );
+        fs::remove_dir_all(home).ok();
+    }
+    /// 201 records once refused the whole projection, and the App showed
+    /// "Projects unavailable" (Maciej, 2026-11-23). The projection reads the
+    /// newest SESSION_LIMIT records by modification time instead.
+    #[test]
+    fn sessions_beyond_the_limit_keep_the_newest_window_instead_of_refusing() {
+        let home = temp_home();
+        let root = home.join("control_plane/workspaces");
+        let sessions_dir = root.join("sessions");
+        fs::create_dir_all(&sessions_dir).expect("workspace dirs");
+        fs::write(
+            root.join("catalog.json"),
+            r#"{"schema":"vibecrafted.workspace-catalog.v1","updated_at":"2026-11-23T00:00:00Z","workspaces":{}}"#,
+        )
+        .expect("catalog");
+        let total = SESSION_LIMIT + 3;
+        let base = UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+        for index in 0..total {
+            write_session(&sessions_dir, index, serde_json::json!([]));
+            let path = sessions_dir.join(format!(
+                "{}.json",
+                hex_id("0198f84e-1111-7abc-8def-", index)
+            ));
+            // Higher index = newer file. A window chosen by file name would
+            // keep the three oldest and drop the three newest.
+            let modified = base + std::time::Duration::from_secs(index as u64);
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .expect("session file")
+                .set_modified(modified)
+                .expect("mtime");
+        }
+
+        let projection = ControlPlane::new(&home)
+            .load_workspace_projection()
+            .expect("an oversized history must not refuse the projection");
+        assert_eq!(projection.sessions.len(), SESSION_LIMIT);
+        let kept = projection
+            .sessions
+            .iter()
+            .map(|session| session.session_id.clone())
+            .collect::<BTreeSet<_>>();
+        for oldest in 0..3 {
+            assert!(!kept.contains(&hex_id("0198f84e-1111-7abc-8def-", oldest)));
+        }
+        assert!(kept.contains(&hex_id("0198f84e-1111-7abc-8def-", total - 1)));
         fs::remove_dir_all(home).ok();
     }
 }

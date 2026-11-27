@@ -206,7 +206,11 @@ def test_vc_terminal_product_entry_pins_config_file_and_refuses_private_alacritt
         text=True,
         env=env,
     )
-    expected = [f"aicx={user_aicx}", "--config-file", str(entry)]
+    expected = [
+        f"aicx={user_aicx}",
+        "--config-file",
+        str(entry),
+    ]
     assert first.stdout.splitlines() == expected
     assert second.stdout.splitlines() == expected
     assert first.stdout == second.stdout
@@ -228,6 +232,16 @@ def test_vc_terminal_product_entry_pins_config_file_and_refuses_private_alacritt
     )
     assert rejected_equals.returncode == 2
     assert "--config-file is product-owned" in rejected_equals.stderr
+    for argument in ("--vibecrafted-hosted", "--vibecrafted-hosted=foreign"):
+        role_override = subprocess.run(
+            [str(wrapper), argument],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert role_override.returncode == 2
+        assert "the hosted application role is product-owned" in role_override.stderr
     entry.unlink()
     missing = subprocess.run(
         [str(wrapper)],
@@ -405,7 +419,11 @@ def test_runtime_pack_installer_and_uninstaller_round_trip_from_one_tool(
     assert operator_skill.read_bytes() == original_skill_bytes
     generation = runtime_home / "releases/9.9.9+g12345678"
     assert Path(installed["root"]) == generation
-    assert Path(installed["frame"]) == generation / "libexec/vc-frame"
+    assert Path(installed["frame"]) == (
+        tmp_path / "external-bin/vc-frame"
+        if sys.platform == "darwin"
+        else generation / "libexec/vc-frame"
+    )
     assert Path(installed["terminal_host"]) == (
         installer._FIXED_TERMINAL_HOST
         if sys.platform == "darwin"
@@ -415,12 +433,16 @@ def test_runtime_pack_installer_and_uninstaller_round_trip_from_one_tool(
     assert "pin_darwin_socket_dir" in (generation / "bin/vc-frame").read_text(
         encoding="utf-8"
     )
-    assert (generation / "libexec/vc-frame").read_bytes() == (
-        payload / "libexec/vc-frame"
-    ).read_bytes()
-    assert (generation / "libexec/vc-terminal").read_bytes() == (
-        payload / "bin/vc-terminal"
-    ).read_bytes()
+    if sys.platform == "darwin":
+        assert not (generation / "libexec/vc-frame").exists()
+        assert not (generation / "libexec/vc-terminal").exists()
+    else:
+        assert (generation / "libexec/vc-frame").read_bytes() == (
+            payload / "libexec/vc-frame"
+        ).read_bytes()
+        assert (generation / "libexec/vc-terminal").read_bytes() == (
+            payload / "bin/vc-terminal"
+        ).read_bytes()
     terminal_entry = (generation / "bin/vc-terminal").read_text(encoding="utf-8")
     assert "--config-file" in terminal_entry
     assert "libexec/vc-terminal" in terminal_entry
@@ -428,7 +450,7 @@ def test_runtime_pack_installer_and_uninstaller_round_trip_from_one_tool(
     assert "alacritty.toml" not in terminal_entry
     assert "terminal-entry.toml" not in terminal_entry
     assert "launch-alt-screen" not in terminal_entry
-    assert (generation / "libexec/vc-frame").read_bytes() != frame_helper.read_bytes()
+    assert Path(installed["frame"]).read_bytes() != frame_helper.read_bytes()
     assert (generation / "bin/vc-terminal").read_bytes() != terminal_host.read_bytes()
     assert (runtime_home / installer.RUNTIME_INSTALL_RECEIPT).is_file()
     current = runtime_home / "tools/vibecrafted-current"
@@ -453,13 +475,17 @@ def test_runtime_pack_installer_and_uninstaller_round_trip_from_one_tool(
     assert str(product_config / "terminal-policy.toml") in terminal_entry
     assert str(product_config / "terminal-theme.toml") in terminal_entry
     assert str(generation / "config/vc-terminal/vibecrafted.toml") not in terminal_entry
-    path_wrapper = (launcher_home / "vc-terminal").read_text(encoding="utf-8")
-    assert "--config-file" not in path_wrapper
-    assert str(generation / "bin/vc-terminal") in path_wrapper
-    assert str(terminal_host) not in path_wrapper
-    assert f'export PATH="{generation / "bin"}:' not in path_wrapper
-    assert "terminal-entry.toml" not in path_wrapper
-    assert "alacritty.toml" not in path_wrapper
+    if sys.platform == "darwin":
+        assert not (launcher_home / "vc-terminal").exists()
+        assert not (launcher_home / "vc-frame").exists()
+    else:
+        path_wrapper = (launcher_home / "vc-terminal").read_text(encoding="utf-8")
+        assert "--config-file" not in path_wrapper
+        assert str(generation / "bin/vc-terminal") in path_wrapper
+        assert str(terminal_host) not in path_wrapper
+        assert f'export PATH="{generation / "bin"}:' not in path_wrapper
+        assert "terminal-entry.toml" not in path_wrapper
+        assert "alacritty.toml" not in path_wrapper
     for runtime in installer.STANDARD_VIEW_RUNTIMES:
         for skill_name in ("vc-audit", "vc-implement"):
             view = home / f".{runtime}/skills/{skill_name}"
@@ -576,6 +602,13 @@ def test_runtime_install_selects_platform_host_over_legacy_helper_override(
     )
     assert Path(installed["terminal_host"]) == expected_host
     assert Path(installed["terminal"]) == generation / "bin/vc-terminal"
+    if sys.platform == "darwin":
+        assert not (generation / "libexec/vc-terminal").exists()
+        assert not (launcher_home / "vc-terminal").exists()
+        assert not (launcher_home / "vc-frame").exists()
+        # The generation-local product entry is the launch boundary on Darwin.
+        # Independent release argv/admission is exercised in product entry tests.
+        return
     assert (generation / "libexec/vc-terminal").is_file()
     path_wrapper = (launcher_home / "vc-terminal").read_text(encoding="utf-8")
     assert str(helper) not in path_wrapper
@@ -637,6 +670,22 @@ def test_runtime_install_selects_platform_host_without_app_root(
     payload_host = payload / "libexec/vc-terminal.app/Contents/MacOS/alacritty"
     _write_terminal_bundle_host(payload_host)
 
+    if sys.platform == "darwin":
+        with pytest.raises(
+            installer.RuntimeInstallRefusal,
+            match="external vc-terminal must not be staged",
+        ):
+            installer.cmd_runtime_install(
+                Namespace(
+                    payload_root=str(payload),
+                    app_root=None,
+                    terminal_host=None,
+                    frame_helper=None,
+                )
+            )
+        assert not (runtime_home / "active.json").exists()
+        shutil.rmtree(payload / "libexec/vc-terminal.app")
+
     assert (
         installer.cmd_runtime_install(
             Namespace(
@@ -658,6 +707,11 @@ def test_runtime_install_selects_platform_host_without_app_root(
         else generation / "libexec/vc-terminal"
     )
     assert Path(installed["terminal_host"]) == expected_host
+    if sys.platform == "darwin":
+        assert not generation_host.exists()
+        assert not (launcher_home / "vc-terminal").exists()
+        assert Path(installed["terminal_host"]).is_file()
+        return
     assert not installer._is_product_bundle_terminal_host(generation_host)
     assert (generation_host.parents[1] / "Info.plist").is_file()
     assert (generation_host.parents[1] / "Resources/Vibecrafted.icns").is_file()
@@ -1072,9 +1126,11 @@ def test_public_launcher_keeps_user_foundations_and_removes_retired_generation_b
     # added; retain that production ordering when this test changes vc-start.
     native_donor = payload / "libexec"
     staged_donor = tmp_path / "native-donor"
-    native_donor.rename(staged_donor)
+    if native_donor.exists():
+        native_donor.rename(staged_donor)
     _write_test_source_provenance(payload)
-    staged_donor.rename(native_donor)
+    if staged_donor.exists():
+        staged_donor.rename(native_donor)
     args = Namespace(
         payload_root=str(payload),
         app_root=str(terminal_host.parents[2]),
@@ -3708,3 +3764,127 @@ def test_request_uninstall_run_stop_signals_swarm_process_group(
     assert "no worker_pgid" in installer._request_uninstall_run_stop(
         launcher, {"run_id": "rese-2", "agent": "swarm"}, timeout_seconds=1
     )
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="independent Darwin product commands"
+)
+# vc-frame has its own Darwin handoff (S4), proved below.
+@pytest.mark.parametrize("name", ["vc-terminal"])
+@pytest.mark.parametrize("replacement", ["same", "file", "symlink"])
+def test_retired_independent_product_command_is_receipt_gated(
+    tmp_path, name, replacement
+):
+    """A previous runtime claim never authorizes deleting a new product release."""
+    runtime = tmp_path / "runtime"
+    generation_bin = runtime / "releases/new/bin"
+    generation_bin.mkdir(parents=True)
+    launcher_home = tmp_path / "launchers"
+    stale = launcher_home / name
+    _write_executable(stale, "#!/bin/sh\necho old-runtime-wrapper\n")
+    digest = installer._sha256_path(stale)
+    backup = runtime / ".installer-backups/original/prior-product"
+    original = "#!/bin/sh\necho prior-independent-product\n"
+    _write_executable(backup, original)
+    receipt = {
+        "owned_files": {str(stale): digest},
+        "owned_symlinks": {},
+        "backups": {str(stale): str(backup)},
+    }
+    previous = json.loads(json.dumps(receipt))
+    external = "#!/bin/sh\necho new-independent-product\n"
+    if replacement == "file":
+        stale.write_text(external)
+    elif replacement == "symlink":
+        target = tmp_path / "new-product" / name
+        _write_executable(target, external)
+        stale.unlink()
+        stale.symlink_to(target)
+    retired = installer._reclaim_foreign_launcher_names(
+        generation_bin,
+        launcher_home,
+        runtime_home=runtime,
+        receipt=receipt,
+        previous=previous,
+    )
+    assert str(stale) not in receipt["owned_files"]
+    assert str(stale) not in receipt["owned_symlinks"]
+    assert str(stale) not in receipt["backups"]
+    assert backup.read_text() == original
+    if replacement == "same":
+        assert retired == [stale]
+        assert stale.read_text() == original
+    else:
+        assert retired == []
+        assert stale.read_text() == external
+        assert stale.is_symlink() == (replacement == "symlink")
+        assert str(backup) in receipt["drift_backup_history"][str(stale)]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin vc-frame handoff (S4)")
+@pytest.mark.parametrize("admitted", [False, True])
+@pytest.mark.parametrize("replacement", ["same", "file", "symlink"])
+def test_retired_vc_frame_shim_hands_its_name_only_to_the_admitted_product(
+    tmp_path, replacement, admitted
+):
+    """The old runtime's vc-frame shim is never reclaimed without an admitted Frame.
+
+    With one, an owned shim takes the admitted product in a single rename; a
+    name the user moved on keeps its bytes. Either way the old claim and its
+    collision backup stop being uninstall authority, and the backup survives.
+    """
+    runtime = tmp_path / "runtime"
+    generation_bin = runtime / "releases/new/bin"
+    generation_bin.mkdir(parents=True)
+    launcher_home = tmp_path / "launchers"
+    stale = launcher_home / "vc-frame"
+    _write_executable(stale, "#!/bin/sh\necho old-runtime-wrapper\n")
+    digest = installer._sha256_path(stale)
+    backup = runtime / ".installer-backups/original/prior-product"
+    original = "#!/bin/sh\necho prior-independent-product\n"
+    _write_executable(backup, original)
+    receipt = {
+        "owned_files": {str(stale): digest},
+        "owned_symlinks": {},
+        "backups": {str(stale): str(backup)},
+    }
+    previous = json.loads(json.dumps(receipt))
+    external = "#!/bin/sh\necho new-independent-product\n"
+    if replacement == "file":
+        stale.write_text(external)
+    elif replacement == "symlink":
+        target = tmp_path / "new-product/vc-frame"
+        _write_executable(target, external)
+        stale.unlink()
+        stale.symlink_to(target)
+    frame = tmp_path / "store/4.6.0-abc/vc-frame"
+    _write_executable(frame, "#!/bin/sh\n")
+    before = stale.read_text()
+
+    retired = installer._reclaim_foreign_launcher_names(
+        generation_bin,
+        launcher_home,
+        runtime_home=runtime,
+        receipt=receipt,
+        previous=previous,
+        admitted_frame=frame if admitted else None,
+    )
+
+    assert backup.read_text() == original
+    if not admitted:
+        # No admitted product: nothing moves and the old claim stays intact.
+        assert retired == []
+        assert stale.read_text() == before
+        assert receipt["owned_files"] == previous["owned_files"]
+        assert receipt["backups"] == previous["backups"]
+        return
+    assert str(stale) not in receipt["owned_files"]
+    assert str(stale) not in receipt["owned_symlinks"]
+    assert str(stale) not in receipt["backups"]
+    assert str(backup) in receipt["drift_backup_history"][str(stale)]
+    if replacement == "same":
+        assert stale.is_symlink()
+        assert stale.resolve() == frame.resolve()
+    else:
+        assert stale.read_text() == external
+        assert stale.is_symlink() == (replacement == "symlink")

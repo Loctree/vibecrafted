@@ -13,6 +13,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from _generation_local_host import present_generation_local_host
+
+from tests._apple_trust_fixture import bind_apple_trust_in_copy
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELPER_SCRIPT = (
     REPO_ROOT
@@ -343,7 +347,18 @@ def test_vc_start_refuses_storage_and_explicit_lobby_before_git(tmp_path: Path) 
         assert "unexpected Git probe" not in result.stderr
 
 
-def test_compiled_vc_start_enters_lobby_through_bundled_shell(tmp_path: Path) -> None:
+def test_compiled_vc_start_enters_lobby_through_bundled_shell(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The shell side of the entry runs the generation-local terminal host on
+    # every host (tests/_generation_local_host.py). On Darwin the shell
+    # otherwise admits vc-terminal only at the fixed
+    # /Applications/vc-terminal.app, so the test passed on a Mac with the
+    # product installed and failed on one without it. Terminal admission keeps
+    # its own coverage in test_external_products. The compiled entry still
+    # admits Frame through the Python resolver, which follows sys.platform;
+    # that boundary is doubled below for the fixture path only.
+    present_generation_local_host(monkeypatch, tmp_path)
     home = tmp_path / "home"
     home.mkdir()
     crafted_home = home / ".vibecrafted"
@@ -360,8 +375,17 @@ def test_compiled_vc_start_enters_lobby_through_bundled_shell(tmp_path: Path) ->
         core_source,
         core_target,
         ignore=shutil.ignore_patterns("__pycache__", "runtime", "skills", "config"),
+        # The fixture generation already carries a resolver double there; the
+        # real resolver from this copy replaces it.
+        dirs_exist_ok=True,
     )
     shutil.copytree(core_source / "runtime", core_target / "runtime")
+    # The PATH Frame below cannot carry the Developer ID signature; only this
+    # generation copy's resolver trusts it, and only it.
+    bind_apple_trust_in_copy(
+        core_target / "external_products.py",
+        trusted=(home / ".local" / "bin" / "vc-frame",),
+    )
     # Explicit synthetic generation identity, independent of editable/source Git.
     for version_file in (generation / "VERSION", core_target / "VERSION"):
         version_file.write_text("0.0.0+g00000000\n", encoding="utf-8")
@@ -397,6 +421,8 @@ def test_compiled_vc_start_enters_lobby_through_bundled_shell(tmp_path: Path) ->
         host_bin / "git",
         f"#!/bin/bash\nprintf '%s\\n' \"$PWD: $*\" >> {shlex.quote(str(git_probe))}\nexit 71\n",
     )
+    # Frame is an external product on PATH, never the generation's own copy.
+    _write_stateful_vc_frame(host_bin, capture_file, session_state_file)
     env = os.environ.copy()
     env.update(
         HOME=str(home),
@@ -1098,8 +1124,11 @@ def test_vc_init_finds_bundled_vc_frame_and_creates_missing_operator_session(
         assert "--new-session-with-layout" in payload
         assert f"--session {expected_session} --new-session-with-layout" not in payload
         assert f"--session {expected_session} action new-pane --floating" in payload
+        # The tab carries the repository identity; in a worktree it differs
+        # from the checkout directory that names the session.
+        repo_tab = _org_repo().split("/")[1]
         assert (
-            f"run_id=interactive target={expected_session}/{REPO_ROOT.name} · claude · unknown"
+            f"run_id=interactive target={expected_session}/{repo_tab} · claude · unknown"
             in result.stdout
         )
         assert f"watch=vc-frame attach {expected_session}" in result.stdout

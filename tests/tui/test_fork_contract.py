@@ -165,7 +165,15 @@ class _World:
         env = {
             key: value
             for key, value in os.environ.items()
-            if key not in {"PYTHONPATH", "PYTHONHOME", *_fixtures.PARENT_CONTEXT_ENV}
+            # A run inside a Frame pane inherits VC_FRAME_CALLER, which would
+            # replace the fork's own caller name.
+            if key
+            not in {
+                "PYTHONPATH",
+                "PYTHONHOME",
+                "VC_FRAME_CALLER",
+                *_fixtures.PARENT_CONTEXT_ENV,
+            }
         }
         # Tracked task forks filter provider environments through env_allowlist.
         env["VIBECRAFTED_TEST_FORK_ARGV"] = str(self.provider_argv_prefix)

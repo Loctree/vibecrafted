@@ -197,6 +197,15 @@ def sessions_dir() -> Path:
     return workspaces_dir() / "sessions"
 
 
+# The control-core projection (SESSION_LIMIT in workspace.rs) reads at most this
+# many session records. The writer keeps the directory inside the same window.
+SESSION_RECORD_LIMIT = 200
+
+
+def sessions_archive_dir() -> Path:
+    return workspaces_dir() / "sessions-archive"
+
+
 def workspace_session_path(vibecrafted_session_id: str) -> Path:
     session_id = require_uuid(
         vibecrafted_session_id, field_name="vibecrafted_session_id"
@@ -2288,7 +2297,68 @@ def record_runtime_session_attachment(
             attachments=tuple(attachments),
         )
         _atomic_write_json(path, updated.to_payload())
+        if current_payload is None:
+            try:
+                _archive_overflow_sessions_unlocked(keep=sid)
+            except OSError:
+                # The attachment is already durable. A failed move only leaves
+                # the window over its bound; the projection still reads the
+                # newest records, and the next new session retries.
+                pass
         return updated
+
+
+def _archive_overflow_sessions_unlocked(*, keep: str) -> list[str]:
+    """Hold the session directory at SESSION_RECORD_LIMIT by archiving the oldest.
+
+    A rolling window (Maciej, 2026-11-23: "żeby zawsze było 200 ... najstarsze
+    żeby były archiwizowane"). Records were never removed: at 201 the
+    control-core projection refused the whole catalog and the App showed no
+    projects. A record leaves the window only when nothing still uses it: no
+    `live` attachment and no `live` owning instance. It is moved intact into
+    `sessions-archive/`, never deleted. From then on it no longer serves as
+    `runtime_session_owner_root` history for an exited seat. Only the oldest
+    records go, and those are the ones whose Frames are long gone.
+    The caller holds the exclusive catalog lock.
+    """
+    paths = sorted(sessions_dir().glob("*.json"))
+    overflow = len(paths) - SESSION_RECORD_LIMIT
+    if overflow <= 0:
+        return []
+    candidates: list[tuple[str, str, Path, str]] = []
+    for path in paths:
+        if path.stem == keep:
+            continue
+        payload = _read_json(path)
+        if payload is None:
+            # Unreadable evidence is not proof of disuse; the census reports it.
+            continue
+        try:
+            record = WorkspaceSessionRecord.from_payload(payload)
+        except (WorkspaceCatalogError, KeyError, TypeError, ValueError):
+            continue
+        if any(attachment.state == "live" for attachment in record.attachments):
+            continue
+        candidates.append(
+            (record.updated_at, path.stem, path, record.workspace_instance_id)
+        )
+    candidates.sort()
+    archive: Path | None = None
+    archived: list[str] = []
+    for _, stem, path, instance_id in candidates:
+        if len(archived) >= overflow:
+            break
+        owner = _read_json(instance_path(instance_id))
+        if owner is not None and owner.get("status") == INSTANCE_STATUS_LIVE:
+            continue
+        if archive is None:
+            archive = _secure_dir(sessions_archive_dir())
+        os.replace(path, archive / path.name)
+        archived.append(stem)
+    if archive is not None:
+        _fsync_dir(sessions_dir())
+        _fsync_dir(archive)
+    return archived
 
 
 # ---------------------------------------------------------------------------

@@ -371,13 +371,15 @@ def test_occupied_descriptor_numbers_do_not_refuse_a_valid_install(tmp_path):
 def test_cold_mac_failure_keeps_its_authenticated_interpreter_until_diagnostics(
     tmp_path,
 ):
-    install, _, env = _cold_fixture(tmp_path, damage="ambiguous")
+    # The pack owner fails after the App interpreter was authenticated and
+    # used; diagnostics must still run on it before the bootstrap cleans up.
+    install, _, env = _cold_fixture(tmp_path, damage="publish")
     result = _run_cold(install, env)
     assert result.returncode != 0
-    assert "Could not establish exact App Main ownership" in result.stderr
+    assert "Installation stopped at" in result.stderr
     assert "No such file or directory" not in result.stderr
     assert (
-        "ambiguous destination Main instances"
+        "fixture pack publication refused"
         in (Path(env["VIBECRAFTED_HOME"]) / "install.log").read_text()
     )
     assert not list(Path(env["TMPDIR"]).glob("vibecrafted-bootstrap.*"))

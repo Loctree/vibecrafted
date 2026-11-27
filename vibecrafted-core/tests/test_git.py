@@ -693,3 +693,34 @@ def test_compare_requires_both_options(args: list[str]) -> None:
     with pytest.raises(SystemExit) as exc:
         git.main(args)
     assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("argv", [["--version"], ["worktrees", "--version"]])
+def test_vc_git_reports_the_executing_package_version(argv, capsys):
+    """bin-provenance asks every tool for its version; vc-git used to refuse."""
+    from vibecrafted_core import __version__
+
+    with pytest.raises(SystemExit) as stopped:
+        git.main(argv)
+    assert stopped.value.code == 0
+    assert capsys.readouterr().out.strip() == f"vc-git {__version__}"
+
+
+def test_help_lists_every_command_as_a_command(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The work families were reachable but read as absent: only prose named them."""
+    with pytest.raises(SystemExit) as exit_info:
+        git.main(["--help"])
+    assert exit_info.value.code == 0
+    text = capsys.readouterr().out
+    usage = text.split("\n\n", 1)[0]
+    assert "{landed,gems,save,worktrees,branches}" in usage
+    commands = text.split("\ncommands:\n", 1)[1]
+    listed = [
+        line.split()[0]
+        for line in commands.splitlines()
+        if line.startswith("  ") and not line.startswith("   ")
+    ]
+    assert listed == ["landed", "gems", "save", "worktrees", "branches"]
+    assert "Show full Git context, including every worktree." in text

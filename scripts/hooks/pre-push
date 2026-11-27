@@ -65,7 +65,8 @@ fi
 
 if [ ${#MD_YAML_FILES[@]} -gt 0 ]; then
     echo "▸ prettier (full, check-only)"
-    npx --yes prettier --check "${MD_YAML_FILES[@]}"
+    # One prettier for every host; the pin lives in scripts/lib/prettier-spec.sh.
+    npx --yes "$(bash scripts/lib/prettier-spec.sh)" --check "${MD_YAML_FILES[@]}"
 fi
 
 echo "▸ semgrep (full)"

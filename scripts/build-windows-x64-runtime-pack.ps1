@@ -61,8 +61,16 @@ if ($SourceRevision -notmatch '^[0-9a-f]{40}$') {
 # carrier CLI already passes --owner-repo/--source-revision; export both so
 # the inherited environment is an atomic pair, not a half-set GITHUB_SHA.
 $env:VIBECRAFTED_SOURCE_REVISION = $SourceRevision
+# The owner is the repository this checkout came from, as the macOS and
+# portable builders take it; provenance refuses an owner its git provider
+# contradicts, and the repository has moved since its first release.
 if (-not $env:VIBECRAFTED_SOURCE_OWNER_REPO) {
-    $env:VIBECRAFTED_SOURCE_OWNER_REPO = "vetcoders/vibecrafted"
+    $originUrl = (& git -C $repoRoot remote get-url origin 2>$null | Out-String).Trim()
+    $originSlug = $originUrl -replace '^(git@[^:]+:|https?://([^/@]+@)?[^/]+/|ssh://[^/]+/)', '' -replace '\.git$', ''
+    if ($originSlug -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+        $originSlug = "vetcoders/vibecrafted"
+    }
+    $env:VIBECRAFTED_SOURCE_OWNER_REPO = $originSlug
 }
 $version = (Get-Content -LiteralPath (Join-Path $repoRoot "VERSION") -Raw).Trim()
 # Canonical carrier name matches Linux/darwin Runtime Pack shape:
@@ -475,7 +483,7 @@ for name in mandatory:
         "name": name, "path": path.relative_to(root).as_posix(),
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "version_argv": argv, "version_output": output,
-        "source_url": donors[name]["repository"] if name in donors else "https://github.com/vetcoders/vibecrafted",
+        "source_url": donors[name]["repository"] if name in donors else "https://github.com/" + os.environ["VIBECRAFTED_SOURCE_OWNER_REPO"],
         "source_revision": donors[name]["revision"] if name in donors else source_revision,
         "source_archive_sha256": donors[name]["source_archive_sha256"] if name in donors else source_manifest_sha,
         "target": "x86_64-pc-windows-msvc", "license": "MIT",
@@ -498,7 +506,7 @@ for name, classification in optional.items():
             "name": name, "path": path.relative_to(root).as_posix(),
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "version_argv": argv, "version_output": output,
-            "source_url": "https://github.com/vetcoders/vibecrafted",
+            "source_url": "https://github.com/" + os.environ["VIBECRAFTED_SOURCE_OWNER_REPO"],
             "source_revision": source_revision, "source_archive_sha256": source_manifest_sha,
             "target": "x86_64-pc-windows-msvc", "license": "MIT",
         })

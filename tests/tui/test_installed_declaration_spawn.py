@@ -59,6 +59,7 @@ import sysconfig
 from pathlib import Path
 
 import pytest
+from _generation_local_host import present_generation_local_host
 
 # --import-mode=importlib: sibling scenes are loaded by file, as they load
 # each other.
@@ -127,6 +128,13 @@ PROVIDER_STUB = (
     "printf 'PROVIDER FIXTURE reached\\n'\n"
     "exit 0\n"
 )
+
+
+@pytest.fixture(autouse=True)
+def _generation_local_host(tmp_path, monkeypatch):
+    # The fixture generations carry their engines under libexec, the
+    # generation-local contract; see tests/_generation_local_host.py.
+    present_generation_local_host(monkeypatch, tmp_path)
 
 
 def _raw_base_interpreter() -> Path:

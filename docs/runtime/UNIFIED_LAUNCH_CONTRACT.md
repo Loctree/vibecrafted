@@ -164,6 +164,70 @@ Help text may mention both spellings. Tests must compare actual normalized reque
 
 Codex native fork acceptance uses an isolated live interactive source; other native provider concurrency remains unverified.
 
+### Strict per-worker MCP profiles
+
+Direct Claude, Codex and AGY launches accept `--mcp-config /private/profile.json`.
+The option is strict: only the supplied HTTP servers are exposed. Unsupported
+providers, supervised research/marbles, malformed profiles and conflicting native
+overrides are refused; omission preserves the existing launch behavior.
+
+```json
+{
+  "mcpServers": {
+    "private-eval": {
+      "type": "http",
+      "url": "https://eval.example.test/mcp",
+      "headers": { "Authorization": "Bearer PRIVATE_RUN_TOKEN" }
+    }
+  }
+}
+```
+
+Keep this file outside the repository and restrict its permissions. The runtime
+freezes it into a private per-run profile and records only its path, digest,
+provider and server names, never header values. Native resume, fork, retry and
+new-session recovery retain that frozen scope; missing or modified frozen input
+is a refusal, not permission to restore the user's global MCP registry.
+Bare interactive resume/fork of a strict-profile run is refused before provider
+startup; supply `--prompt` or `--file` to use the supported task continuation.
+
+Admission requires the launcher and managed Guardian to load the same updated
+core. A new source-only client against an older installed Guardian is not an
+isolation guarantee: automatic recovery imports the Guardian's own workflow
+module.
+
+| Provider | Native isolation                                               | Authentication boundary                                                                                 |
+| -------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Claude   | `--mcp-config FILE --strict-mcp-config`                        | Existing provider login/config retained                                                                 |
+| Codex    | Private `CODEX_HOME` with only supplied servers                | Selected model/provider routing retained; provider `auth.json` shared by symlink, not MCP OAuth storage |
+| AGY      | Native `--gemini_dir DIR`, containing its private MCP registry | Existing provider login retained through the unchanged real `HOME`                                      |
+
+The worker's `HOME` is never replaced: browser/tool subprocesses must retain the
+real macOS Keychain environment. Codex keyring-only authentication without a
+file-backed login or API-key environment is refused. MCP isolation does not
+change the separately admitted permissions/sandbox policy and is not a
+filesystem or network sandbox.
+
+Native inventory is not always the session surface: Claude's `mcp list`
+subcommand can display global registrations even when print mode is strict.
+Verify print-mode initialization and an actual authorized private tool call.
+AGY headless permission denial is not a successful tool call, even if its
+process/result status says success; inspect the tool completion state.
+
+For a Native-managed macOS install, activate a coherent Runtime Pack through the
+canonical paired Runtime Pack/App installer. Compiler-only `make install-tools`
+staging is not activation proof: native service admission still binds `active.json`,
+the install receipt, current selection and the installed core's physical location.
+Compiler `preserve`/`ensure` policies do not relax that identity contract. Do not
+use a source-generation selector or a Python fallback to bypass a refused native
+publication or paired-App gate.
+
+Native stopped-pair admission corroborates owned, stable execution and supervisor
+receipts, the dead owner, absent role PID paths and the actual closed loopback
+bind endpoint. A public URL is not bind authority. Invalid native evidence never
+downgrades to legacy PID-file absence, and an expired settlement deadline cannot
+produce a successful handoff.
+
 ## Workspace creation and Frame dependency
 
 The recovered START implementation uses one parser for the deck and shell.

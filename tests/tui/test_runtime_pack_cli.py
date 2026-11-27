@@ -127,14 +127,17 @@ def _fake_runtime_payload(root: Path, capture: Path, marker: str | None = None) 
 
 
 def _seed_vc_frame_product_payload(root: Path) -> None:
+    """A darwin pack: product wrappers and resolvers, no carried Terminal or Frame."""
     wrapper = root / "bin/vc-frame"
     wrapper.parent.mkdir(parents=True, exist_ok=True)
     wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
     wrapper.chmod(0o755)
-    native = root / "libexec/vc-frame"
-    native.parent.mkdir(parents=True, exist_ok=True)
-    native.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 32)
-    native.chmod(0o755)
+    core = root / "vibecrafted-core/vibecrafted_core"
+    core.mkdir(parents=True, exist_ok=True)
+    for name in ("external_products.py", "terminal_host.py"):
+        shutil.copy2(
+            REPO_ROOT / "vibecrafted-core/vibecrafted_core" / name, core / name
+        )
     terminal_wrapper = root / "bin/vc-terminal"
     terminal_wrapper.write_text(
         (REPO_ROOT / "scripts/vc-terminal-product-entry.sh").read_text(
@@ -148,9 +151,6 @@ def _seed_vc_frame_product_payload(root: Path) -> None:
         REPO_ROOT / "scripts/vc-terminal-product-entry.sh",
         root / "scripts/vc-terminal-product-entry.sh",
     )
-    terminal_host = root / "libexec/vc-terminal"
-    terminal_host.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 32)
-    terminal_host.chmod(0o755)
     config = root / "vibecrafted-core/vibecrafted_core/config/vc-frame"
     (config / "layouts").mkdir(parents=True, exist_ok=True)
     (config / "themes").mkdir()
@@ -844,44 +844,28 @@ def test_final_app_carrier_installer_uses_its_bound_version_truth(
     assert (carrier / "VERSION").read_text(encoding="utf-8") == f"{VERSION}\n"
 
 
-def test_app_helpers_can_verify_but_cannot_replace_signed_pack_bytes(
+def test_app_helpers_cannot_pair_with_a_pack_that_carries_no_products(
     tmp_path: Path,
 ) -> None:
+    """App helper pairing belongs to historical rollback packs only.
+
+    vc-app-update.sh passes --terminal-host/--frame-helper only when it restores
+    a prior App whose pack carried both engines. A darwin pack since c26b524b
+    carries neither, so there is nothing to prove the helpers against and the
+    installer must refuse before it runs.
+    """
     payload = tmp_path / "source/VibecraftedRuntime"
     capture = tmp_path / "argv"
     _fake_runtime_payload(payload, capture)
-    terminal = payload / "libexec/vc-terminal"
     archive, public_key = _sealed_archive(tmp_path, payload)
     app = tmp_path / "Vibecrafted.app"
     app_terminal = app / "Contents/Helpers/vc-terminal.app/Contents/MacOS/alacritty"
     app_frame = app / "Contents/Helpers/vc-frame"
-    app_terminal.parent.mkdir(parents=True)
-    app_frame.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(terminal, app_terminal)
-    shutil.copy2(payload / "libexec/vc-frame", app_frame)
+    for helper in (app_terminal, app_frame):
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 32)
+        helper.chmod(0o755)
 
-    result = _run(
-        "--pack",
-        str(archive),
-        "--app-root",
-        str(app),
-        "--terminal-host",
-        str(app_terminal),
-        "--frame-helper",
-        str(app_frame),
-        env={
-            "CAPTURE": str(capture),
-            "VIBECRAFTED_RUNTIME_PACK_PUBLIC_KEY": str(public_key),
-        },
-    )
-
-    assert result.returncode == 0, result.stderr
-    argv = capture.read_text(encoding="utf-8").splitlines()
-    assert "--app-root" in argv
-    assert "--terminal-host" not in argv
-    assert "--frame-helper" not in argv
-
-    app_frame.write_bytes(b"foreign app frame")
     rejected = _run(
         "--pack",
         str(archive),
@@ -898,7 +882,8 @@ def test_app_helpers_can_verify_but_cannot_replace_signed_pack_bytes(
     )
 
     assert rejected.returncode != 0
-    assert "App vc-frame helper disagrees" in rejected.stderr
+    assert "Runtime Pack native terminal host missing" in rejected.stderr
+    assert not capture.exists()
 
 
 def test_runtime_uninstall_uses_installed_generation_tool(tmp_path: Path) -> None:
@@ -1072,8 +1057,13 @@ def test_runtime_packager_emits_one_closed_root_and_checksum(tmp_path: Path) -> 
         assert "VibecraftedRuntime/bin/vc-o" in names
         assert "VibecraftedRuntime/bin/vc-admin" in names
         assert "VibecraftedRuntime/bin/vc-procs" in names
-        assert "VibecraftedRuntime/libexec/vc-frame" in names
-        assert "VibecraftedRuntime/libexec/vc-terminal" in names
+        # Terminal and Frame are independent products on darwin.
+        assert "VibecraftedRuntime/libexec/vc-frame" not in names
+        assert "VibecraftedRuntime/libexec/vc-terminal" not in names
+        assert (
+            "VibecraftedRuntime/vibecrafted-core/vibecrafted_core/external_products.py"
+            in names
+        )
         assert "VibecraftedRuntime/runtime-pack-provenance.json" in names
         assert "VibecraftedRuntime/scripts/vibecrafted" in names
         assert not any(name.endswith("/.DS_Store") for name in names)
@@ -1108,8 +1098,9 @@ def test_runtime_packager_emits_one_closed_root_and_checksum(tmp_path: Path) -> 
         helper.parent.mkdir(parents=True, exist_ok=True)
         helper.write_text("#!/bin/sh\n", encoding="utf-8")
         helper.chmod(0o755)
-    (runtime / "libexec/vc-frame").write_bytes(b"\x7fELF" + b"\x00" * 32)
-    (runtime / "libexec/vc-terminal").write_bytes(b"\x7fELF" + b"\x00" * 32)
+    for relative in ("libexec/vc-frame", "libexec/vc-terminal"):
+        (runtime / relative).write_bytes(b"\x7fELF" + b"\x00" * 32)
+        (runtime / relative).chmod(0o755)
     linux_output = tmp_path / "Vibecrafted_RuntimePack_fixture-linux-arm64.tar.gz"
     linux = subprocess.run(
         [
@@ -1172,9 +1163,8 @@ def test_runtime_pack_contract_rejects_dead_vc_frame_wrapper_only(
     capture = tmp_path / "argv"
     _fake_runtime_payload(payload, capture)
     _source_provenance(payload)
-    (payload / "libexec/vc-frame").unlink()
 
-    with pytest.raises(RuntimePackContractError, match="native vc-frame is missing"):
+    def seal() -> None:
         write_provenance(
             payload,
             carrier_basename="Vibecrafted_RuntimePack_fixture.tar.gz",
@@ -1185,6 +1175,21 @@ def test_runtime_pack_contract_rejects_dead_vc_frame_wrapper_only(
             terminal_revision=TERMINAL_SHA,
             frame_revision=FRAME_SHA,
         )
+
+    # A darwin wrapper only reaches Frame through the external product resolver.
+    resolver = payload / "vibecrafted-core/vibecrafted_core/external_products.py"
+    kept = resolver.read_bytes()
+    resolver.unlink()
+    with pytest.raises(RuntimePackContractError, match="resolver is missing"):
+        seal()
+    resolver.write_bytes(kept)
+    # Frame is its own product; a pack that carries it is refused.
+    carried = payload / "libexec/vc-frame"
+    carried.parent.mkdir(parents=True, exist_ok=True)
+    carried.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 32)
+    carried.chmod(0o755)
+    with pytest.raises(RuntimePackContractError, match="must not be carried"):
+        seal()
 
 
 def test_runtime_pack_contract_ignores_mutable_host_metadata(tmp_path: Path) -> None:
@@ -1514,10 +1519,8 @@ def _preflight_builder_repo(tmp_path: Path) -> tuple[Path, str, Path]:
     shutil.copy2(
         XCODE_CHANNEL_LIBRARY, repo / "scripts/lib" / XCODE_CHANNEL_LIBRARY.name
     )
-    shutil.copy2(
-        REPO_ROOT / "scripts/lib/release-single-flight.sh",
-        repo / "scripts/lib/release-single-flight.sh",
-    )
+    for name in ("release-single-flight.sh", "rust-linker-darwin-classic.sh"):
+        shutil.copy2(REPO_ROOT / "scripts/lib" / name, repo / "scripts/lib" / name)
     # App/notarize preflight validates the real Update channel before donor
     # discovery. Supply its real Python entry point and contract dependencies;
     # an empty package initializer keeps unrelated core runtime imports out.
@@ -1526,12 +1529,23 @@ def _preflight_builder_repo(tmp_path: Path) -> tuple[Path, str, Path]:
     contract_dir = repo / "vibecrafted-core/vibecrafted_core"
     contract_dir.mkdir(parents=True)
     (contract_dir / "__init__.py").write_text("", encoding="utf-8")
-    for name in ("product_contract.py", "runtime_pack_contract.py"):
+    for name in (
+        "product_contract.py",
+        "runtime_pack_contract.py",
+        "external_products.py",
+        "terminal_host.py",
+    ):
         shutil.copy2(
             REPO_ROOT / "vibecrafted-core/vibecrafted_core" / name,
             contract_dir / name,
         )
     (repo / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
+    # The builder reads the external product pins from the bound commit too.
+    (repo / "config").mkdir()
+    shutil.copy2(
+        REPO_ROOT / "config/source-components.json",
+        repo / "config/source-components.json",
+    )
     # The builder pins its rustup toolchain and targets as a preflight. A real
     # rustup under this fresh HOME would find no toolchain and try to install
     # one over the network. The stub reports the pinned toolchain and targets
@@ -1559,7 +1573,7 @@ def _preflight_builder_repo(tmp_path: Path) -> tuple[Path, str, Path]:
     # (`git show "$ROOT_SHA:VERSION"`), not from the working tree, so the
     # fixture commits it -- otherwise every preflight dies on that read first.
     stage_build_lease_fixture(repo)
-    head = seed_private_git_fixture(repo, "VERSION")
+    head = seed_private_git_fixture(repo, "VERSION", "config/source-components.json")
     previous = repo / "dist/Vibecrafted_RuntimePack_previous-darwin-arm64.tar.gz"
     previous.write_bytes(b"the pack that succeeded yesterday")
     _selection_record(
@@ -1596,11 +1610,8 @@ def _record(repo: Path) -> dict[str, str]:
 @pytest.mark.parametrize(
     ("environment", "expected"),
     (
-        pytest.param(
-            {"VIBECRAFTED_TERMINAL_REPO": "/nonexistent/vc-terminal"},
-            "missing donor directory",
-            id="missing-donor",
-        ),
+        # Terminal and Frame are external products since c26b524b; the builder
+        # has no donor directory left to refuse.
         pytest.param(
             {"VIBECRAFTED_RELEASE_DATE": "not-a-date"},
             "VIBECRAFTED_RELEASE_DATE must be YYYYMMDD",
@@ -1665,12 +1676,6 @@ def test_a_failed_preflight_invalidates_the_previous_ready_selection(
             {},
             "usage:",
             id="usage-error",
-        ),
-        pytest.param(
-            ("--notarize-only",),
-            {"VIBECRAFTED_TERMINAL_REPO": "/nonexistent/vc-terminal"},
-            "missing donor directory",
-            id="notarize-only",
         ),
         pytest.param(
             ("--notarize-only",),

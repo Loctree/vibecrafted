@@ -649,6 +649,100 @@ def test_runtime_session_attachments_preserve_dead_frame_and_activate_replacemen
     assert wc.runtime_session_owner_root("unbound", "/legacy/socket/root") is None
 
 
+def test_new_session_record_archives_the_oldest_unused_record_beyond_the_window(
+    home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Maciej, 2026-11-23: the App showed no projects at 201 records. The
+    # window rolls: the oldest unused record moves to sessions-archive/ intact.
+    monkeypatch.setattr(wc, "SESSION_RECORD_LIMIT", 3)
+    first_root = tmp_path / "first"
+    first_root.mkdir()
+    first = wc.create_workspace(root=first_root, display_label="first", select=True)
+    first_identity = wc.resolve_run_workspace_identity(root=first_root)
+    wc.record_runtime_session_attachment(
+        workspace_id=first.workspace_id,
+        vibecrafted_session_id=first_identity.vibecrafted_session_id,
+        workspace_instance_id=first_identity.workspace_instance_id,
+        runtime="vc-frame",
+        runtime_session_id="first",
+        state="dead",
+        socket_dir="/socket/root",
+    )
+    owner = json.loads(
+        wc.instance_path(first_identity.workspace_instance_id).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert owner["status"] == wc.INSTANCE_STATUS_LIVE
+    template = json.loads(
+        wc.workspace_session_path(first_identity.vibecrafted_session_id).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    def seed(updated_at: str, *, state: str, instance_id: str) -> str:
+        session_id = wc.new_uuid7()
+        payload = json.loads(json.dumps(template))
+        payload.update(
+            session_id=session_id,
+            workspace_instance_id=instance_id,
+            created_at=updated_at,
+            updated_at=updated_at,
+        )
+        payload["attachments"][0]["state"] = state
+        wc.workspace_session_path(session_id).write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        return session_id
+
+    unused = seed("2026-01-01T00:00:00Z", state="dead", instance_id=wc.new_uuid7())
+    live_frame = seed("2026-01-02T00:00:00Z", state="live", instance_id=wc.new_uuid7())
+    live_owner = seed(
+        "2026-01-03T00:00:00Z",
+        state="dead",
+        instance_id=first_identity.workspace_instance_id,
+    )
+    unused_bytes = wc.workspace_session_path(unused).read_bytes()
+
+    second_root = tmp_path / "second"
+    second_root.mkdir()
+    second = wc.create_workspace(root=second_root, display_label="second", select=False)
+    second_identity = wc.resolve_run_workspace_identity(
+        root=second_root, env={wc.ENV_WORKSPACE_ID: second.workspace_id}
+    )
+    wc.record_runtime_session_attachment(
+        workspace_id=second.workspace_id,
+        vibecrafted_session_id=second_identity.vibecrafted_session_id,
+        workspace_instance_id=second_identity.workspace_instance_id,
+        runtime="vc-frame",
+        runtime_session_id="second",
+        state="live",
+        socket_dir="/socket/root",
+    )
+
+    remaining = {path.stem for path in wc.sessions_dir().glob("*.json")}
+    assert remaining == {
+        first_identity.vibecrafted_session_id,
+        second_identity.vibecrafted_session_id,
+        live_frame,
+        live_owner,
+    }
+    archived = wc.sessions_archive_dir() / f"{unused}.json"
+    assert archived.read_bytes() == unused_bytes
+
+    # Refreshing an existing record never moves anything.
+    wc.record_runtime_session_attachment(
+        workspace_id=second.workspace_id,
+        vibecrafted_session_id=second_identity.vibecrafted_session_id,
+        workspace_instance_id=second_identity.workspace_instance_id,
+        runtime="vc-frame",
+        runtime_session_id="second",
+        state="dead",
+        socket_dir="/socket/root",
+    )
+    assert {path.stem for path in wc.sessions_dir().glob("*.json")} == remaining
+
+
 def test_runtime_session_attachment_rejects_foreign_instance(
     home: Path, tmp_path: Path
 ) -> None:

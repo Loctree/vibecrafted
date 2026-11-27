@@ -471,7 +471,7 @@ Commands:
   init [agent]         Orient an agent in this repo
   <skill> <agent>      Run a workflow with an agent
   resume <agent>       Continue a stopped run (--run-id) or a provider session
-  fork <agent>         Branch a provider session (--session | --run-id) into a new one: claude, codex, grok
+  fork <agent>         Branch a provider session (--session | --run-id) into a new one: claude, codex, grok, kimi
   resume-session       Continue an exact provider session as a tracked run
   relocate             Snapshot open sessions + worktrees for a machine move (snapshot|restore)
   status               Today's agent activity
@@ -668,6 +668,7 @@ def _option_lines(topic: str) -> list[str]:
         "  --remediation-reason <text>   Required with --remediate-trust-block; recorded on the launch receipt",
         "  --remediation-task <id>       Bounded identity: repair or admission",
         "  --model <name>                 Exact model; CLI > plan frontmatter > provider default",
+        "  --mcp-config <PATH.json>       Only this profile's MCP servers; frozen on native resume/fork/retry (supported direct agents only)",
         "  --session <id|current|last>    Continue this provider-native session (never a work-* run id)",
     ]
     definition = workflow_definition(topic)

@@ -85,12 +85,17 @@ def test_private_child_fence_controls(tmp_path):
     assert network.returncode == 0, network.stderr
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the copied child host is the macOS product terminal; a Linux pack carries libexec/vc-terminal",
+)
 @pytest.mark.parametrize("damage", ["missing", "malformed", "symlink", "code"])
 def test_copied_child_host_admission_precedes_drift_refusal(installed, damage):
     paths, payload, result = installed
     host = installer._FIXED_TERMINAL_HOST
     generation = Path(result["root"])
-    assert host.read_bytes() == (generation / "libexec/vc-terminal").read_bytes()
+    assert not (generation / "libexec/vc-terminal").exists()
+    assert host.is_file()
     script = """
 import importlib.util, sys
 from pathlib import Path
@@ -126,12 +131,7 @@ except owner.RuntimeInstallRefusal as error:
         host.write_bytes(host.read_bytes() + b"fixture code drift")
     negative = subprocess.run(command, capture_output=True, text=True, check=False)
     assert negative.returncode == 23, negative.stderr
-    reason = (
-        "differs from this Runtime Pack's signed terminal"
-        if damage == "code"
-        else "host missing or malformed"
-    )
-    assert reason in negative.stderr
+    assert "Install vc-terminal" in negative.stderr
     assert _snapshot(paths["runtime_home"]) == prior
 
 
@@ -1253,7 +1253,9 @@ def crash(source, destination):
         raise OSError("injected pointer publication failure")
     real_replace(source, destination)
     if ((cut == "directory-gap" and src == Path(product))
-        or (cut == "launcher" and dst == Path(launcher) / "vc-terminal")
+        # Any published launcher: a Darwin generation publishes no vc-terminal
+        # launcher, because the terminal is the standalone external product.
+        or (cut == "launcher" and dst.parent == Path(launcher))
         or (cut == "selector" and dst == Path(runtime) / "active.json")
         or (cut == "rollback" and rollback and dst == Path(product))):
         os._exit(86)
@@ -1727,7 +1729,8 @@ def test_terminal_wrapper_pins_physical_owner_and_preserves_payload_argv(
     assert _snapshot(home) == before
     if accepted:
         capture = json.loads(result.stdout)
-        assert capture["argv"] == ["--config-file", str(entry), *arguments]
+        expected_prefix = ["--config-file", str(entry)]
+        assert capture["argv"] == [*expected_prefix, *arguments]
         environment = capture["env"]
         for key in ("VIBECRAFTED_RUNTIME_ROOT", "VIBECRAFTED_ROOT"):
             assert environment[key] == str(generation)
@@ -1802,7 +1805,7 @@ def _terminal_wrapper_generation(tmp_path: Path) -> tuple[Path, Path, Path]:
     sys.platform != "darwin",
     reason=".app is a Darwin identity mechanism; other platforms keep the flat host",
 )
-def test_terminal_wrapper_execs_only_fixed_main_host(tmp_path, monkeypatch):
+def test_terminal_wrapper_execs_only_independent_host(tmp_path, monkeypatch):
     home = tmp_path / "home"
     entry = home / ".config/vibecrafted/vc-terminal/vc-terminal.toml"
     entry.parent.mkdir(parents=True)
@@ -1830,7 +1833,12 @@ def test_terminal_wrapper_execs_only_fixed_main_host(tmp_path, monkeypatch):
     assert result.returncode == 0, result.stderr
     captured = json.loads(result.stdout)
     assert captured["host"] == str(host)
-    assert captured["argv"] == ["--config-file", str(entry), "-e", "true"]
+    assert captured["argv"] == [
+        "--config-file",
+        str(entry),
+        "-e",
+        "true",
+    ]
     # A generation bundle or inherited override never rescues a missing or
     # symlinked fixed host. Keep the flat generation engine present as control.
     host.unlink()
@@ -1840,9 +1848,53 @@ def test_terminal_wrapper_execs_only_fixed_main_host(tmp_path, monkeypatch):
         refused = subprocess.run(
             [str(wrapper), "-e", "true"], capture_output=True, text=True, check=False
         )
-        assert refused.returncode == 78, refused.stderr
+        assert refused.returncode == 69, refused.stderr
         assert not refused.stdout
-        assert "fixed signed host missing" in refused.stderr
+        assert "independent vc-terminal missing or aliased" in refused.stderr
+
+    # Restoring the independent product restores launch without a bundle flag.
+    host.unlink()
+    standalone_host = host.parents[3] / "vc-terminal.app/Contents/MacOS/vc-terminal"
+    standalone_host.parent.mkdir(parents=True, exist_ok=True)
+    standalone_host.write_text(paired.read_text())
+    standalone_host.chmod(0o755)
+    (standalone_host.parents[1] / "Info.plist").write_text(
+        '<?xml version="1.0"?><plist version="1.0"><dict>'
+        "<key>CFBundleIdentifier</key><string>io.vetcoders.vc-terminal</string>"
+        "<key>CFBundleExecutable</key><string>vc-terminal</string>"
+        "<key>CFBundleShortVersionString</key><string>0.18.0-dev</string>"
+        "</dict></plist>\n",
+        encoding="utf-8",
+    )
+    sign_private_terminal_pair(paired, standalone_host)
+    standalone_result = subprocess.run(
+        [str(wrapper), "-e", "true"], capture_output=True, text=True, check=False
+    )
+    assert standalone_result.returncode == 0, standalone_result.stderr
+    standalone_captured = json.loads(standalone_result.stdout)
+    assert standalone_captured["host"] == str(standalone_host)
+    assert standalone_captured["argv"] == ["--config-file", str(entry), "-e", "true"]
+
+
+def test_x9run_env_vars_take_priority_over_vibecrafted_aliases(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from vibecrafted_core import env_allowlist, runtime_paths
+
+    monkeypatch.setenv("VIBECRAFTED_HOME", str(tmp_path / "legacy-home"))
+    monkeypatch.setenv("X9RUN_HOME", str(tmp_path / "x9run-home"))
+    assert runtime_paths.vibecrafted_home() == tmp_path / "x9run-home"
+
+    monkeypatch.setenv("VIBECRAFTED_RUNTIME_HOME", str(tmp_path / "legacy-rt"))
+    monkeypatch.setenv("X9RUN_RUNTIME_HOME", str(tmp_path / "x9run-rt"))
+    assert runtime_paths.vibecrafted_runtime_home() == tmp_path / "x9run-rt"
+
+    monkeypatch.setenv("VIBECRAFTED_LAUNCHER_BIN", str(tmp_path / "legacy-bin"))
+    monkeypatch.setenv("X9RUN_LAUNCHER_BIN", str(tmp_path / "x9run-bin"))
+    assert runtime_paths.vibecrafted_launcher_bin() == tmp_path / "x9run-bin"
+
+    assert env_allowlist.env_key_allowed("X9RUN_HOME")
+    assert env_allowlist.env_key_allowed("X9RUN_RUNTIME_ROOT")
 
 
 @pytest.mark.skipif(
@@ -3751,3 +3803,112 @@ def test_kdl_preference_binding_with_missing_or_changed_baseline(
         if destination.exists()
         else binding == "missing-file"
     )
+
+
+# 2026-11-23, upgrade 4.5.4 -> 4.6.0: the old generation's closed manifest
+# failed this schema, so every present preference raised before a bound
+# choice could decide it, and one choice per attempt could never clear three.
+
+
+def _old_manifest_predates_schema(monkeypatch, old_root: Path) -> None:
+    real = installer._load_runtime_generation_manifest
+
+    def load(generation):
+        if Path(generation) == old_root:
+            return (
+                None,
+                "installed generation manifest does not satisfy the runtime schema",
+            )
+        return real(generation)
+
+    monkeypatch.setattr(installer, "_load_runtime_generation_manifest", load)
+
+
+def _user_preferences(paths: dict) -> dict[str, Path]:
+    product = paths["product_config"]
+    files = {
+        "kdl": product / "vc-frame/config.kdl",
+        "policy": product / "terminal-policy.toml",
+    }
+    files["kdl"].write_bytes(files["kdl"].read_bytes() + b"// my frame\n")
+    files["policy"].write_bytes(files["policy"].read_bytes() + b"# my terminal\n")
+    return files
+
+
+def _bound(conflict, path: Path) -> dict[str, str]:
+    (item,) = [i for i in conflict.envelope["files"] if Path(i["path"]) == path]
+    return {
+        "resolve_preference": "keep-current",
+        "preference_current_sha256": item["current_sha256"],
+        "preference_incoming_sha256": item["incoming_sha256"],
+        "preference_path": str(path),
+    }
+
+
+def _conflict_paths(conflict) -> set[Path]:
+    return {Path(item["path"]) for item in conflict.envelope["files"]}
+
+
+def test_bound_choice_resolves_a_preference_whose_old_manifest_predates_schema(
+    installed, tmp_path, capsys, monkeypatch
+):
+    paths, _, result = installed
+    _old_manifest_predates_schema(monkeypatch, Path(result["root"]))
+    config = paths["product_config"] / "vc-frame/config.kdl"
+    config.write_bytes(config.read_bytes() + b"// my frame\n")
+    user = config.read_bytes()
+    payload_b = seed_runtime_pack(tmp_path / "pack-b", version="9.9.10+b")
+
+    conflict = _install_conflict(payload_b, capsys)
+    assert _conflict_paths(conflict) == {config}
+    _install(payload_b, capsys, **_bound(conflict, config))
+
+    assert config.read_bytes() == user
+    _resolve(paths, capsys, status="ready")
+
+
+def test_several_preference_conflicts_clear_one_bound_choice_per_attempt(
+    installed, tmp_path, capsys, monkeypatch
+):
+    paths, _, result = installed
+    _old_manifest_predates_schema(monkeypatch, Path(result["root"]))
+    files = _user_preferences(paths)
+    user = {name: path.read_bytes() for name, path in files.items()}
+    receipt_path = installer._runtime_receipt_path(paths["runtime_home"])
+    active = (paths["runtime_home"] / "active.json").read_bytes()
+    payload_b = seed_runtime_pack(tmp_path / "pack-b", version="9.9.10+b")
+
+    # Untouched preferences equal the incoming defaults and need no choice.
+    first = _install_conflict(payload_b, capsys)
+    assert _conflict_paths(first) == set(files.values())
+
+    second = _install_conflict(payload_b, capsys, **_bound(first, files["kdl"]))
+    assert _conflict_paths(second) == {files["policy"]}
+    receipt = json.loads(receipt_path.read_text())
+    assert set(receipt["candidate_resolutions"]) == {str(files["kdl"])}
+    assert (paths["runtime_home"] / "active.json").read_bytes() == active
+
+    _install(payload_b, capsys, **_bound(second, files["policy"]))
+    assert {name: path.read_bytes() for name, path in files.items()} == user
+    receipt = json.loads(receipt_path.read_text())
+    assert "candidate_resolutions" not in receipt
+    assert "candidate_conflicts" not in receipt
+    _resolve(paths, capsys, status="ready")
+
+
+def test_a_carried_preference_choice_lapses_when_the_user_file_changes(
+    installed, tmp_path, capsys, monkeypatch
+):
+    paths, _, result = installed
+    _old_manifest_predates_schema(monkeypatch, Path(result["root"]))
+    files = _user_preferences(paths)
+    payload_b = seed_runtime_pack(tmp_path / "pack-b", version="9.9.10+b")
+    first = _install_conflict(payload_b, capsys)
+    second = _install_conflict(payload_b, capsys, **_bound(first, files["kdl"]))
+
+    files["kdl"].write_bytes(files["kdl"].read_bytes() + b"// edited again\n")
+    third = _install_conflict(payload_b, capsys, **_bound(second, files["policy"]))
+
+    # The stale choice is not replayed onto new bytes; the file is asked again.
+    assert _conflict_paths(third) == {files["kdl"]}
+    assert b"edited again" in files["kdl"].read_bytes()

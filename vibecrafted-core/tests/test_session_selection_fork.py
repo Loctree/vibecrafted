@@ -430,7 +430,7 @@ def test_two_native_task_forks_preserve_source_and_private_input(
     monkeypatch.setattr(
         workflow,
         "_verified_native_resume_command",
-        lambda agent, session: (
+        lambda agent, session, **_controls: (
             native_resume_argv(agent, session),
             "probe_confirmed",
             "test",

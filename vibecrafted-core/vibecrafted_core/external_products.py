@@ -1,0 +1,248 @@
+"""Read-only resolution of independently released terminal and multiplexer products."""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+# This file is also called by the bootstrap installer before package deps exist.
+terminal_host = None
+if sys.platform != "win32":
+    _spec = importlib.util.spec_from_file_location(
+        "_external_terminal_host", Path(__file__).with_name("terminal_host.py")
+    )
+    if _spec is None or _spec.loader is None:
+        raise ImportError("cannot load terminal admission owner")
+    terminal_host = importlib.util.module_from_spec(_spec)
+    sys.modules[_spec.name] = terminal_host
+    _spec.loader.exec_module(terminal_host)
+
+TEAM_ID = "MW223P3NPX"
+FRAME_MIN = (4, 5, 1)
+FRAME_MAX = (5, 0, 0)
+TERMINAL_HINT = "Install vc-terminal >=0.18.0 in /Applications/vc-terminal.app from https://github.com/vetcoders/vc-terminal/releases"
+FRAME_HINT = "Install vc-frame >=4.5.1,<5.0.0 on PATH from https://github.com/vetcoders/vc-frame/releases"
+PRODUCTS = {
+    "vc-terminal": {
+        "id": "io.vetcoders.vc-terminal",
+        "min_version": "0.18.0",
+        "team_id": TEAM_ID,
+        "resolve": "/Applications/vc-terminal.app",
+        "install_hint": TERMINAL_HINT,
+    },
+    "vc-frame": {
+        "id": "io.vetcoders.vc-frame",
+        "min_version": "4.5.1",
+        "max_version_exclusive": "5.0.0",
+        "resolve": "PATH",
+        "install_hint": FRAME_HINT,
+    },
+}
+
+
+class ProductUnavailable(RuntimeError):
+    """A missing or incompatible external product; resolution never downloads it."""
+
+
+def _codesign_requirement_check(
+    path: Path, requirement: str
+) -> subprocess.CompletedProcess[str]:
+    """Verify `path` against inline requirement text.
+
+    codesign reads `-R <text>` as a requirement file path; inline text needs a
+    leading "=". Without it every binary failed with "invalid requirement
+    specification", so no signed vc-frame was ever admitted.
+    """
+    return subprocess.run(
+        [
+            "/usr/bin/codesign",
+            "--verify",
+            "--strict",
+            "-R",
+            f"={requirement}",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def _require_developer_id(path: Path, identifier: str) -> None:
+    """Bind the signed identifier to Apple's Developer ID certificate chain."""
+    requirement = (
+        f'anchor apple generic and identifier "{identifier}" '
+        f'and certificate leaf[subject.OU] = "{TEAM_ID}" '
+        "and certificate 1[field.1.2.840.113635.100.6.2.6] exists "
+        "and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
+    )
+    result = _codesign_requirement_check(path, requirement)
+    if result.returncode:
+        raise ProductUnavailable(
+            f"{path} must be {identifier} signed by Developer ID team {TEAM_ID}"
+        )
+
+
+def _require_gatekeeper(app: Path) -> None:
+    """Gatekeeper must accept the bundle for execution (notarization included)."""
+    assessment = subprocess.run(
+        ["/usr/sbin/spctl", "--assess", "--type", "execute", str(app)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if assessment.returncode:
+        raise ProductUnavailable(f"Gatekeeper does not accept {app.name}")
+
+
+def resolve_terminal() -> Path:
+    if terminal_host is None:
+        raise ProductUnavailable(f"vc-terminal.app requires macOS. {TERMINAL_HINT}")
+    path = Path(terminal_host.STANDALONE_HOST)
+    try:
+        # install.sh admits Python 3.9, whose Path.parents takes no slice.
+        for node in (path, *list(path.parents)[:4]):
+            if node.is_symlink():
+                raise ProductUnavailable(f"symlink in terminal product path: {node}")
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise ProductUnavailable(f"terminal executable missing: {path}")
+        terminal_host.require_standalone_bundle_metadata(str(path))
+        for target in (path, path.parents[2]):
+            identity = terminal_host.static_code_identity(str(target))
+            if identity.adhoc or identity.team != TEAM_ID:
+                raise ProductUnavailable(
+                    f"terminal must be Developer ID signed by {TEAM_ID}: {target}"
+                )
+        _require_developer_id(path.parents[2], PRODUCTS["vc-terminal"]["id"])
+        _require_gatekeeper(path.parents[2])
+    except (
+        OSError,
+        subprocess.TimeoutExpired,
+        terminal_host.Refusal,
+        ProductUnavailable,
+    ) as exc:
+        raise ProductUnavailable(f"{exc}. {TERMINAL_HINT}") from exc
+    return path
+
+
+def is_runtime_launcher(candidate: Path, *, runtime: Path | None = None) -> bool:
+    """A Vibecrafted runtime's own vc-frame launcher, never an external product.
+
+    On macOS vc-frame is a separate product and such a launcher only points
+    back into a runtime. A Linux Runtime Pack carries the engine itself and
+    publishes this launcher in front of it.
+    """
+    runtime = (runtime or Path(__file__).resolve().parents[2]).resolve()
+    physical = candidate.resolve()
+    if physical.is_relative_to(runtime):
+        return True
+    with physical.open("rb") as stream:
+        prefix = stream.read(4096)
+    return bool(
+        re.search(rb"(?m)^(?:export )?VIBECRAFTED_RUNTIME_ROOT=", prefix)
+        or b"vc-frame-product-entry.sh" in prefix
+    )
+
+
+def resolve_frame(
+    *, search_path: str | None = None, runtime: Path | None = None
+) -> Path:
+    """Choose the first external PATH command; an incompatible first hit is final."""
+    runtime = (runtime or Path(__file__).resolve().parents[2]).resolve()
+    for directory in (
+        os.environ.get("PATH", "") if search_path is None else search_path
+    ).split(os.pathsep):
+        if not directory or not Path(directory).is_absolute():
+            continue
+        candidate = Path(directory) / "vc-frame"
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        try:
+            physical = candidate.resolve()
+            # Ignore runtime launchers to prevent recursion or stale engines.
+            if is_runtime_launcher(physical, runtime=runtime):
+                continue
+        except (OSError, RuntimeError) as exc:
+            raise ProductUnavailable(
+                f"cannot inspect vc-frame at {candidate}: {exc}. {FRAME_HINT}"
+            ) from exc
+        try:
+            if sys.platform == "darwin":
+                # Verify before executing an arbitrary PATH occupant.
+                _require_developer_id(physical, PRODUCTS["vc-frame"]["id"])
+            result = subprocess.run(
+                [str(candidate), "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            match = re.fullmatch(
+                r"vc-frame\s+(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?\s*",
+                result.stdout,
+            )
+            version = tuple(map(int, match.groups())) if match else None
+            if (
+                result.returncode != 0
+                or version is None
+                or not FRAME_MIN <= version < FRAME_MAX
+            ):
+                raise ProductUnavailable(
+                    f"incompatible vc-frame at {candidate}: {result.stdout.strip()!r}"
+                )
+        except (OSError, subprocess.TimeoutExpired, ProductUnavailable) as exc:
+            raise ProductUnavailable(f"{exc}. {FRAME_HINT}") from exc
+        return physical
+    raise ProductUnavailable(f"vc-frame missing from PATH. {FRAME_HINT}")
+
+
+def product_status() -> dict[str, dict[str, str]]:
+    result = {}
+    for name, resolver in (
+        ("vc-terminal", resolve_terminal),
+        ("vc-frame", resolve_frame),
+    ):
+        try:
+            result[name] = {"status": "available", "path": str(resolver())}
+        except ProductUnavailable as exc:
+            result[name] = {"status": "unavailable", "message": str(exc)}
+    return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "product", choices=("terminal", "frame", "status", "runtime-launcher")
+    )
+    parser.add_argument(
+        "path", nargs="?", help="runtime-launcher: the vc-frame launcher to classify"
+    )
+    args = parser.parse_args()
+    if args.product == "runtime-launcher":
+        if not args.path:
+            parser.error("runtime-launcher needs the launcher path")
+        try:
+            return 0 if is_runtime_launcher(Path(args.path)) else 1
+        except (OSError, RuntimeError):
+            return 1
+    try:
+        if args.product == "status":
+            print(json.dumps(product_status(), sort_keys=True))
+        else:
+            print(resolve_terminal() if args.product == "terminal" else resolve_frame())
+        return 0
+    except ProductUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 69
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -7,6 +7,13 @@ The shell facade no longer discovers its engines on PATH or through
   ``<generation>/bin/vc-frame`` as entry and ``<generation>/libexec/vc-frame``
   as engine, both real, executable, non-symlink files
   (runtime/shell/lib/vc_frame.sh ``_vetcoders_vc_frame_bin``, 3d9da4dc);
+* on Darwin that engine is an independent product: the shell asks the
+  generation's ``external_products.py``, exactly as ``bin/vc-frame`` does, and
+  never reads ``libexec`` (``_vetcoders_product_engine_present``). A fake
+  generation therefore carries a double of that resolver
+  (``install_product_resolver``). The double answers from the ``libexec``
+  stand-in, so a test removes the stand-in to model an unavailable product on
+  any host;
 * ``vc-terminal`` is its strict twin under the same generation
   (``_vetcoders_vc_terminal_bin``, 0e5e6b03), and a caller without a PTY is
   handed that terminal before any interactive entry runs;
@@ -49,11 +56,44 @@ PRIMARY_SHELL = REPO_ROOT / "config" / "alacritty" / "launch-primary-shell.zsh"
 _ENGINE = "#!/bin/sh\nexit 0\n"
 
 
+# Double of the generation's product resolver. The real one proves Developer
+# ID and Gatekeeper for products installed on the host; here a product is
+# available exactly when the fixture staged its stand-in engine.
+_RESOLVER = """import sys
+from pathlib import Path
+
+engine = Path(__file__).resolve().parents[2] / "libexec" / f"vc-{sys.argv[1]}"
+if not engine.is_file() or engine.is_symlink():
+    print(f"vc-{sys.argv[1]} unavailable in the fixture generation", file=sys.stderr)
+    raise SystemExit(69)
+print(engine)
+"""
+
+
 def write_executable(path: Path, body: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
     return path
+
+
+def install_product_resolver(generation: Path) -> Path:
+    """Give a fake generation the resolver its Darwin shell and entries ask.
+
+    A test that stages the real resolver, or its own interpreter, keeps it.
+    """
+    python = generation / "bin" / "python3"
+    if not python.exists() and not python.is_symlink():
+        # A real file, never a link to the runner's interpreter: a test that
+        # later writes its own generation python must not write through it.
+        write_executable(
+            python, f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n'
+        )
+    resolver = generation / "vibecrafted-core/vibecrafted_core/external_products.py"
+    if not resolver.exists():
+        resolver.parent.mkdir(parents=True, exist_ok=True)
+        resolver.write_text(_RESOLVER, encoding="utf-8")
+    return resolver
 
 
 def fake_generation(root: Path, *, front_doors: tuple[str, ...] = ()) -> Path:
@@ -65,6 +105,7 @@ def fake_generation(root: Path, *, front_doors: tuple[str, ...] = ()) -> Path:
     generation = root / "generation"
     write_executable(generation / "libexec" / "vc-frame", _ENGINE)
     (generation / "bin").mkdir(parents=True, exist_ok=True)
+    install_product_resolver(generation)
     for verb in front_doors:
         write_executable(generation / "bin" / verb, "#!/bin/sh\nexit 0\n")
     return generation
@@ -170,6 +211,10 @@ import sys
 from pathlib import Path
 
 args = sys.argv[1:]
+# The external product resolver admits Frame by its version line.
+if args == ["--version"]:
+    print("vc-frame 4.6.0")
+    raise SystemExit(0)
 capture = Path(os.environ["CAPTURE_FILE"])
 state_file = Path(os.environ["SESSION_STATE_FILE"])
 name_file = state_file.with_suffix(".name")
