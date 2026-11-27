@@ -751,6 +751,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+
       - name: Install Runtime Pack build prerequisites
         run: |
           set -euo pipefail
@@ -762,8 +765,6 @@ jobs:
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
           rustup target add --toolchain "$RUSTUP_TOOLCHAIN" \
             wasm32-unknown-unknown wasm32-wasip1
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           curl -L --proto '=https' --tlsv1.2 -sSf \
             -o /tmp/install-binstall.sh \
             https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh
