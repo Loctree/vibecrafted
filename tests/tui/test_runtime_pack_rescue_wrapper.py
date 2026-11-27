@@ -1238,17 +1238,8 @@ def test_public_rescue_plan_never_reconciles_installed_service(tmp_path, install
     plist = Path.home() / "Library/LaunchAgents/io.vetcoders.vibecrafted.server.plist"
     plist.parent.mkdir(parents=True)
     plist.write_text("fixture")
-    host_bin = tmp_path / "host-bin"
-    host_bin.mkdir()
-    uname = host_bin / "uname"
-    uname.write_text(
-        '#!/bin/sh\ncase "${1:-}" in\n'
-        '  -s) printf "Darwin\\n" ;;\n'
-        '  -m) printf "arm64\\n" ;;\n'
-        '  *) printf "Darwin\\n" ;;\n'
-        "esac\n"
-    )
-    uname.chmod(0o755)
+    # The host is presented as the fixture's own seal (_wrapper_env): a fixed
+    # Darwin uname here made a Linux host refuse its linux-* fixture as foreign.
     archive, key = _sign_payload_archive(tmp_path / "carrier", payload)
     result = _run_wrapper(
         "--pack",
@@ -1256,7 +1247,7 @@ def test_public_rescue_plan_never_reconciles_installed_service(tmp_path, install
         *_wrapper_flags("9.9.9+a"),
         "--rescue",
         "--plan",
-        env=_wrapper_env(key, {"PATH": f"{host_bin}{os.pathsep}{os.environ['PATH']}"}),
+        env=_wrapper_env(key),
     )
     assert result.returncode == 0, (
         _json_out(result).get("reason"),
